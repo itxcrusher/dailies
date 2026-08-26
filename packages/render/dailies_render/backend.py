@@ -1,6 +1,6 @@
 """The render-farm contract Dailies is written against.
 
-Everything above this line (the agents, the API, the dashboards) talks to a
+Everything above this layer (the agents, the API, the dashboards) talks to a
 ``RenderBackend``, never to a scheduler directly. That is what keeps the system
 portable: Cloud Run is the first adapter, not the product.
 """
@@ -45,6 +45,9 @@ class RenderBackend(Protocol):
     def get_output(self, job_id: str) -> list[str]: ...
 
     def get_logs(self, job_id: str) -> Iterable[str]:
-        """Stream the job's stdout. Iterable, not ``list``: a running job's log has
-        no end yet, and the point of watching one is reacting before it does."""
+        """Stream the job's stdout.
+
+        ``Iterable``, not ``list``: a running job's log has no end yet, and the
+        point of watching one is reacting before it does.
+        """
         ...
