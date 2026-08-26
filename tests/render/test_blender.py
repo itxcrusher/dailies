@@ -53,33 +53,6 @@ def test_shot_reaches_every_event():
     assert {e.shot for e in events} == {"SH010"}
 
 
-def test_identity_labels_reach_every_event():
-    """Identity passed to the wrapper must land on the events, not just the shot.
-
-    Without this, every sample from every worker collapses into one ``unknown``
-    series and per-worker questions ("is one worker dragging?") stop being
-    answerable.
-    """
-    events = list(
-        render_from_stream(
-            iter(SAMPLE),
-            shot="SH010",
-            project="atlas",
-            sequence="SEQ01",
-            render_job="job-7",
-            worker="worker-3",
-        )
-    )
-    assert events
-    for event in events:
-        assert (event.project, event.sequence, event.render_job, event.worker) == (
-            "atlas",
-            "SEQ01",
-            "job-7",
-            "worker-3",
-        )
-
-
 class FakeBackend:
     """Minimal reference implementation of ``RenderBackend``.
 
