@@ -19,6 +19,12 @@ from typing import Final
 
 from pydantic import BaseModel, Field, model_validator
 
+#: Placeholder identity for a producer that did not supply one. Deliberately not a
+#: plausible value: an ``unknown`` series in Grafana reads as a wiring bug, which is
+#: what it is. It lives here rather than in the parser because every consumer
+#: (exporter, dashboards, the diagnosis agent) has to test label values against it.
+UNKNOWN: Final = "unknown"
+
 
 class Metric(StrEnum):
     """Keys into ``METRICS``. An enum so call sites are statically checkable."""
@@ -89,7 +95,11 @@ class EventKind(str, Enum):
 _REQUIRED_BY_KIND: Final[Mapping[EventKind, tuple[str, ...]]] = MappingProxyType(
     {
         EventKind.FRAME_COMPLETE: ("duration_seconds",),
-        EventKind.OOM: ("memory_bytes",),
+        # NOT memory_bytes: an OOM line does not always carry a reading, and zero is a
+        # legal one (Blender reports `Mem:0.00M` while synchronizing), so requiring the
+        # field would force a producer to invent a measurement at the exact moment
+        # memory mattered most. `None` means "not reported" and the exporter skips it.
+        EventKind.OOM: ("message",),
         EventKind.FRAME_FAILED: ("message",),
         EventKind.ASSET_MISSING: ("message",),
         EventKind.ENGINE_CRASH: ("message",),
@@ -129,6 +139,9 @@ class RenderEvent(BaseModel):
     duration_seconds: float | None = Field(default=None, ge=0)
     memory_bytes: int | None = Field(default=None, ge=0)
     message: str | None = None
+    #: The asset a failure names, when the line carried one. Structured so a consumer
+    #: does not have to re-run the parser's regex over ``message`` to get it.
+    asset_path: str | None = None
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     @model_validator(mode="after")

@@ -201,10 +201,29 @@ def test_every_event_can_produce_its_label_sets(line):
     assert "frame" not in e.job_labels()
 
 
-def test_oom_events_carry_memory_bytes():
-    """The schema requires it, so the parser must never emit OOM without one."""
+def test_oom_without_a_reading_reports_no_memory_rather_than_zero():
+    """Regression: the OOM branch used to fabricate ``memory_bytes=0``.
+
+    Zero is a reading Blender genuinely emits, so the sentinel was indistinguishable
+    from a measurement, and it published "0 bytes in use" at the exact moment memory
+    spiked. Absent means absent.
+    """
     e = parse_line("CUDA error: out of memory", shot="SH010")
-    assert e.memory_bytes is not None
+    assert e.kind == EventKind.OOM
+    assert e.memory_bytes is None
+
+
+def test_a_genuine_zero_memory_reading_survives():
+    """The counterpart: `Mem:0.00M` during synchronizing is a real reading, not absence."""
+    line = "Fra:12 Mem:0.00M (Peak 0.00M) | Error: System is out of GPU memory"
+    e = parse_line(line, shot="SH010")
+    assert e.kind == EventKind.OOM
+    assert e.memory_bytes == 0
+
+
+def test_oom_carries_the_reading_when_the_line_has_one():
+    line = "Fra:12 Mem:15000.00M (Peak 16000.00M) | Error: System is out of GPU memory"
+    assert parse_line(line, shot="SH010").memory_bytes == (15000 * 1024**2)
 
 
 @pytest.mark.parametrize("line", ALL_INTERESTING_LINES[2:])
@@ -255,6 +274,12 @@ def test_unset_identity_lands_in_a_visibly_unknown_series():
         "Time: 00:04.55",
         "Warning: the scene has no camera",
         "| Rendering 3 / 16 samples",
+        # "missing" is a word that shows up all over healthy output. On its own it is
+        # not a failure signal; only a quoted path after it is.
+        "Warning: Mesh 'Cube' has missing UVs for material 'skin'",
+        "Error: Python script missing entry point",
+        "Info: dismissing the modal operator",
+        "Warning: missing UVs",
     ],
 )
 def test_uninteresting_lines_return_none(line):
@@ -304,3 +329,83 @@ def test_saved_line_prefers_an_on_line_frame_number_to_the_hint():
     )
     assert e.kind == EventKind.FRAME_COMPLETE
     assert e.frame == 12
+
+
+def test_the_bare_word_missing_does_not_classify_without_a_path():
+    """Regression: `missing` matched as a bare substring with no word boundary.
+
+    Every one of these inflated the asset-missing counter and pointed a diagnosis
+    agent at a file that is not a file.
+    """
+    for line in (
+        "Warning: Mesh 'Cube' has missing UVs for material",
+        "Error: Python script missing entry point",
+        "Info: dismissing the modal operator",
+    ):
+        assert parse_line(line, shot="SH010") is None, line
+
+
+@pytest.mark.parametrize(
+    "line, path",
+    [
+        ("Warning: Unable to open file '/assets/jacket_diffuse.exr'", "/assets/jacket_diffuse.exr"),
+        ("Cannot read file '/assets/set.blend'", "/assets/set.blend"),
+        ("Warning: missing '/assets/hair.abc'", "/assets/hair.abc"),
+        ("Unable to open file /assets/bare.exr", "/assets/bare.exr"),
+        ("Unable to open file '/assets/my hair.abc'", "/assets/my hair.abc"),
+    ],
+)
+def test_asset_missing_carries_the_structured_path(line, path):
+    """The consumer that has to stat the file must not re-implement this regex."""
+    e = parse_line(line, shot="SH010")
+    assert e.kind == EventKind.ASSET_MISSING
+    assert e.asset_path == path
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "CUDA error: CUDA_ERROR_OUT_OF_MEMORY in cuMemAlloc",
+        "Error at cuMemAlloc: OUT_OF_MEMORY",
+        "hipErrorOutOfMemory: HIP_ERROR_OUT_OF_MEMORY",
+    ],
+)
+def test_underscored_driver_oom_constants_are_detected(line):
+    """The driver constants appear verbatim in Cycles logs, with no spaces."""
+    assert parse_line(line, shot="SH010").kind == EventKind.OOM
+
+
+def test_frame_is_recovered_from_a_dot_delimited_output_path():
+    """`name.####.ext` is the dominant VFX naming convention and Blender emits it."""
+    e = parse_line("Saved: '/out/SH010.0012.exr'  Time: 00:04.55", shot="SH010", frame_hint=99)
+    assert e.frame == 12
+
+
+def test_descriptive_labels_are_caller_supplied():
+    """A line of stdout does not name the renderer, the scene or the priority."""
+    e = parse_line(
+        "Segmentation fault",
+        shot="SH010",
+        renderer="eevee_next",
+        scene="SH010_lighting",
+        priority="rush",
+    )
+    labels = e.frame_labels()
+    assert labels["renderer"] == "eevee_next"
+    assert labels["scene"] == "SH010_lighting"
+    assert labels["priority"] == "rush"
+
+
+def test_unsupplied_descriptive_labels_are_visibly_unknown():
+    """Regression: these were silently defaulted to cycles/Scene/normal.
+
+    A wrong label value is the hardest thing to fix retroactively in a metrics store,
+    so an unset one has to read as a wiring bug, exactly like the identity labels.
+    """
+    e = parse_line("Segmentation fault", shot="SH010")
+    assert e.renderer == e.scene == e.priority == UNKNOWN
+
+
+def test_progress_reads_by_name_not_by_position():
+    e = parse_line("Fra:12 Mem:245.31M (Peak 512.00M) | Rendering 3 / 16", shot="SH010")
+    assert (e.frame, e.memory_bytes) == (12, int(245.31 * 1024**2))

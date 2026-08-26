@@ -130,7 +130,8 @@ def test_frame_labels_are_the_default_set():
 
 def test_payload_fields_are_never_labels():
     for labels in ALL_LABEL_SETS.values():
-        assert not set(labels) & {"kind", "duration_seconds", "memory_bytes", "message", "timestamp"}
+        payload = {"kind", "duration_seconds", "memory_bytes", "message", "asset_path", "timestamp"}
+        assert not set(labels) & payload
 
 
 # --- the model ----------------------------------------------------------------
@@ -182,7 +183,9 @@ def test_negative_numeric_fields_are_rejected(overrides):
     "kind, missing",
     [
         (EventKind.FRAME_COMPLETE, "duration_seconds"),
-        (EventKind.OOM, "memory_bytes"),
+        # NOT memory_bytes: an OOM line does not always carry a reading, and zero is
+        # a legal one, so the kind requires the raw line instead.
+        (EventKind.OOM, "message"),
         (EventKind.FRAME_FAILED, "message"),
         (EventKind.ASSET_MISSING, "message"),
         (EventKind.ENGINE_CRASH, "message"),
@@ -191,6 +194,12 @@ def test_negative_numeric_fields_are_rejected(overrides):
 def test_kind_requires_its_payload_field(kind, missing):
     with pytest.raises(ValidationError):
         valid_event(kind=kind, **{missing: None})
+
+
+def test_an_oom_without_a_memory_reading_is_valid():
+    """The engine does not always report one, and zero is a real reading, so the
+    schema must not force a producer to invent a measurement."""
+    valid_event(kind=EventKind.OOM, memory_bytes=None, message="out of memory")
 
 
 def test_kinds_with_their_payload_validate():
