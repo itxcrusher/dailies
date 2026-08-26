@@ -47,10 +47,14 @@ class RenderTelemetry:
             unit="s",
             description="Wall-clock time to render one frame",
         )
+        # "Current", not "peak": the parser reads Blender's `Mem:` field and ignores the
+        # `(Peak ...)` figure beside it. This string is what Grafana shows next to the
+        # metric, and someone sizing a worker off a number labelled peak that is not the
+        # peak will under-provision it.
         self._memory = meter.create_gauge(
             METRICS[Metric.WORKER_MEMORY],
             unit="By",
-            description="Peak worker memory during a frame",
+            description="Current worker memory in use, sampled per frame",
         )
         self._failed = meter.create_counter(
             METRICS[Metric.FRAMES_FAILED],
