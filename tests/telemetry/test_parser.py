@@ -266,3 +266,41 @@ def test_parse_line_does_not_mutate_its_input():
     before = line
     parse_line(line, shot="SH010")
     assert line == before
+
+
+# --- self-review regressions --------------------------------------------------
+
+
+def test_duration_handles_frames_that_ran_over_an_hour():
+    """Blender widens Time: to HH:MM:SS once a frame passes the hour.
+
+    Reading that as MM:SS silently reports a 1h23m frame as 83 seconds, which is the
+    exact input a deadline-risk agent must not be lied to about.
+    """
+    e = parse_line(
+        "Saved: '/out/SH010_0125.exr'  Time: 01:23:45.67 (Saving: 00:00.03)", shot="SH010"
+    )
+    assert e.duration_seconds == pytest.approx(5025.67)
+
+
+def test_frame_is_recovered_from_blenders_default_output_naming():
+    """With no filename prefix set, Blender writes bare frame-numbered files."""
+    e = parse_line("Saved: '/out/0012.png'  Time: 00:04.55", shot="SH010", frame_hint=99)
+    assert e.frame == 12
+
+
+def test_digits_in_a_shot_name_are_not_read_as_a_frame_number():
+    """'SH010.png' carries no frame number; the hint must win over the shot digits."""
+    e = parse_line("Saved: '/out/SH010.png'  Time: 00:04.55", shot="SH010", frame_hint=7)
+    assert e.frame == 7
+
+
+def test_saved_line_prefers_an_on_line_frame_number_to_the_hint():
+    """Every other branch prefers the frame on the line; this one must not differ."""
+    e = parse_line(
+        "Fra:12 Mem:245.31M | Saved: '/out/beauty.png'  Time: 00:04.55",
+        shot="SH010",
+        frame_hint=99,
+    )
+    assert e.kind == EventKind.FRAME_COMPLETE
+    assert e.frame == 12

@@ -35,8 +35,12 @@ UNKNOWN: Final = "unknown"
 # Anchored on the current memory reading, not the peak in parentheses.
 _FRA: Final = re.compile(r"Fra:(?P<frame>\d+)\s+Mem:(?P<mem>[\d.]+)(?P<unit>[KMG])")
 # "Saved: '/out/SH010_0012.png'  Time: 00:04.55 (Saving: 00:00.03)". The first Time:
-# is the frame's render time; the parenthesised one is the file write.
-_SAVED: Final = re.compile(r"Saved:\s+'(?P<path>[^']+)'\s+Time:\s*(?P<mm>\d+):(?P<ss>[\d.]+)")
+# is the frame's render time; the parenthesised one is the file write. Blender widens
+# the field to HH:MM:SS once a frame passes the hour, so the hours group is optional
+# and a two-field reading backtracks into mm:ss.
+_SAVED: Final = re.compile(
+    r"Saved:\s+'(?P<path>[^']+)'\s+Time:\s*(?:(?P<hh>\d+):)?(?P<mm>\d+):(?P<ss>[\d.]+)"
+)
 _MISSING: Final = re.compile(
     r"(?:Unable to open file|Cannot read file|missing)\s+'?(?P<path>[^'\s]+)", re.IGNORECASE
 )
@@ -49,9 +53,10 @@ _CRASH: Final = re.compile(
 )
 
 _UNIT: Final = {"K": 1024, "M": 1024**2, "G": 1024**3}
-#: Blender names output files ``<base>_<frame>.<ext>``, which is how a completed frame
-#: is identified when the caller has no better hint.
-_FRAME_IN_PATH: Final = re.compile(r"_(\d+)\.\w+$")
+#: Blender names output files ``<base>_<frame>.<ext>``, or bare ``<frame>.<ext>`` when
+#: no filename prefix is configured. The leading separator is required: without it the
+#: digits in a shot name ("SH010.png") would be read as frame 10.
+_FRAME_IN_PATH: Final = re.compile(r"[_/\\](\d+)\.\w+$")
 
 #: An OOM line does not always carry a memory reading, but the schema requires one on
 #: the event. Zero reads as "the engine did not report it" and cannot be mistaken for
@@ -117,8 +122,8 @@ def parse_line(
         in_path = _FRAME_IN_PATH.search(m["path"])
         return RenderEvent(
             kind=EventKind.FRAME_COMPLETE,
-            frame=int(in_path.group(1)) if in_path else frame_hint,
-            duration_seconds=int(m["mm"]) * 60 + float(m["ss"]),
+            frame=int(in_path.group(1)) if in_path else frame,
+            duration_seconds=int(m["hh"] or 0) * 3600 + int(m["mm"]) * 60 + float(m["ss"]),
             **identity,
         )
     if progress:
