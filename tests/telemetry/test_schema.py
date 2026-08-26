@@ -3,9 +3,10 @@ from datetime import UTC, datetime
 
 import pytest
 from dailies_telemetry.schema import (
+    FAILURE_LABELS,
     FRAME_LABELS,
     JOB_LABELS,
-    LABELS,
+    JOB_WORKER_LABELS,
     METRICS,
     WORKER_LABELS,
     EventKind,
@@ -20,6 +21,7 @@ LABEL_NAME_RE = re.compile(r"[a-zA-Z_][a-zA-Z0-9_]*")
 ALL_LABEL_SETS = {
     "FRAME_LABELS": FRAME_LABELS,
     "JOB_LABELS": JOB_LABELS,
+    "JOB_WORKER_LABELS": JOB_WORKER_LABELS,
     "WORKER_LABELS": WORKER_LABELS,
 }
 
@@ -98,7 +100,7 @@ def test_label_sets_are_immutable_tuples():
 
 
 def test_every_label_is_a_model_field():
-    """LABELS and the model must not drift apart."""
+    """The label sets and the model must not drift apart."""
     for set_name, labels in ALL_LABEL_SETS.items():
         unknown = set(labels) - set(RenderEvent.model_fields)
         assert not unknown, f"{set_name} names non-fields: {unknown}"
@@ -122,9 +124,45 @@ def test_worker_labels_are_worker_scoped():
     assert valid_event(worker="worker-3").worker_labels()["worker"] == "worker-3"
 
 
+def test_job_worker_labels_keep_every_axis_except_frame():
+    """The widest BOUNDED set: `frame` is unique per observation, everything else is not.
+
+    Keeping `frame` would open one series per sample and grow without bound as the shot
+    renders; dropping worker instead would hide a single slow machine.
+    """
+    assert "frame" not in JOB_WORKER_LABELS
+    assert "worker" in JOB_WORKER_LABELS
+    assert set(JOB_WORKER_LABELS) == set(FRAME_LABELS) - {"frame"}
+    assert set(valid_event().job_worker_labels()) == set(JOB_WORKER_LABELS)
+
+
+def test_failure_labels_carry_the_reason_and_the_job_axes():
+    """Without `reason` every failure kind collapses into one indistinguishable series."""
+    assert set(FAILURE_LABELS) == set(JOB_LABELS) | {"reason"}
+    labels = valid_event(kind=EventKind.OOM, message="killed").failure_labels()
+    assert set(labels) == set(FAILURE_LABELS)
+    # `kind.value`, not `str(kind)`: the attribute must read `oom`, not `EventKind.OOM`.
+    assert labels["reason"] == "oom"
+
+
+def test_failure_reason_is_bounded_and_distinct_per_kind():
+    reasons = {
+        valid_event(kind=kind, message="boom").failure_labels()["reason"]
+        for kind in (EventKind.FRAME_FAILED, EventKind.OOM, EventKind.ENGINE_CRASH)
+    }
+    assert reasons == {"frame_failed", "oom", "engine_crash"}
+
+
+def test_reason_is_not_a_model_field_and_labels_refuses_it():
+    """`reason` is derived from `kind`, so it must not be reachable through labels()."""
+    assert "reason" not in RenderEvent.model_fields
+    with pytest.raises(AttributeError):
+        valid_event().labels(FAILURE_LABELS)
+
+
 def test_frame_labels_are_the_default_set():
     e = valid_event()
-    assert set(e.labels()) == set(LABELS) == set(FRAME_LABELS)
+    assert set(e.labels()) == set(FRAME_LABELS)
     assert e.labels() == e.frame_labels()
 
 
@@ -213,4 +251,4 @@ def test_timestamp_defaults_to_an_aware_utc_now():
     e = valid_event()
     assert e.timestamp.tzinfo is not None
     assert before <= e.timestamp <= datetime.now(UTC)
-    assert "timestamp" not in LABELS
+    assert "timestamp" not in FRAME_LABELS

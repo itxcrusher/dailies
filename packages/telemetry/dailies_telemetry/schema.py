@@ -78,8 +78,22 @@ JOB_LABELS: Final[tuple[str, ...]] = tuple(
 #: Labels for worker-level metrics (memory, retries).
 WORKER_LABELS: Final[tuple[str, ...]] = ("render_job", "worker")
 
-#: Backwards-compatible alias for the widest label set.
-LABELS: Final[tuple[str, ...]] = FRAME_LABELS
+#: Labels for per-worker distributions (frame duration). Every job axis plus `worker`,
+#: but never `frame`: a frame number is unique per observation, so including it gives
+#: one series per sample and the series count grows without bound as the shot renders.
+#: Dropping it turns "a 200-frame shot on 20 workers" from 4,000 series into 20, while
+#: still answering both "is this shot on pace" and "is one worker dragging".
+JOB_WORKER_LABELS: Final[tuple[str, ...]] = tuple(
+    label for label in FRAME_LABELS if label != "frame"
+)
+
+#: Labels for the failure counter: the job axes plus WHY the frame was lost. Bounded
+#: by ``FAILURE_KINDS`` (three values), and without it FRAME_FAILED, OOM and
+#: ENGINE_CRASH collapse into one indistinguishable series, so "are we losing frames
+#: to OOM or to engine crashes" becomes unanswerable. Adding a label to a live counter
+#: re-partitions its series and breaks every rule written against it, so it belongs
+#: here from the start rather than the first time someone needs the breakdown.
+FAILURE_LABELS: Final[tuple[str, ...]] = (*JOB_LABELS, "reason")
 
 
 class EventKind(str, Enum):
@@ -177,3 +191,15 @@ class RenderEvent(BaseModel):
 
     def worker_labels(self) -> dict[str, str]:
         return self.labels(WORKER_LABELS)
+
+    def job_worker_labels(self) -> dict[str, str]:
+        return self.labels(JOB_WORKER_LABELS)
+
+    def failure_labels(self) -> dict[str, str]:
+        """Job labels plus the failure reason.
+
+        ``reason`` is not a model field, so it is added here rather than through
+        ``labels()``: the value is the event kind, and it is written as ``kind.value``
+        so the attribute reads ``oom`` rather than ``EventKind.OOM``.
+        """
+        return {**self.job_labels(), "reason": self.kind.value}

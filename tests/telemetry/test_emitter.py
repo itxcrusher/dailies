@@ -12,10 +12,10 @@ to catch it.
 default.
 """
 
-from dailies_telemetry.emitter import RenderTelemetry
+from dailies_telemetry.emitter import FRAME_DURATION_BUCKETS_SECONDS, RenderTelemetry
 from dailies_telemetry.schema import (
-    FRAME_LABELS,
-    JOB_LABELS,
+    FAILURE_LABELS,
+    JOB_WORKER_LABELS,
     METRICS,
     WORKER_LABELS,
     EventKind,
@@ -59,9 +59,49 @@ def test_frame_complete_records_duration():
     point = metrics[METRICS[Metric.FRAME_DURATION]].data.data_points[0]
     assert point.sum == 8.0
     assert point.count == 1
-    assert set(point.attributes) == set(FRAME_LABELS)
+    # Job axes plus `worker`, never `frame`: a frame number is unique per observation,
+    # so labelling by it gives one histogram (sixteen bucket counters) per sample and
+    # the series count climbs for as long as the shot renders.
+    assert set(point.attributes) == set(JOB_WORKER_LABELS)
     assert point.attributes["shot"] == "SH010"
-    assert point.attributes["frame"] == "3"
+    assert "frame" not in point.attributes
+
+
+def test_duration_series_do_not_multiply_with_the_frame_number():
+    """The cardinality guarantee, asserted rather than described.
+
+    Fifty frames off one worker must stay ONE series carrying fifty samples. This is
+    the regression that matters: re-adding `frame` here is a one-word change that no
+    other assertion in the file would catch, and label sets are the hardest part of a
+    metric to change once dashboards are written against them.
+    """
+    tel, reader = make()
+    for frame in range(50):
+        tel.record(
+            RenderEvent.demo(kind=EventKind.FRAME_COMPLETE, frame=frame, duration_seconds=120.0)
+        )
+
+    points = collect(reader)[METRICS[Metric.FRAME_DURATION]].data.data_points
+    assert len(points) == 1
+    assert points[0].count == 50
+
+
+def test_duration_buckets_resolve_render_scale_frame_times():
+    """The SDK default tops out at 10s; a render farm's frames are minutes long.
+
+    Without explicit boundaries 2, 3 and 4 minute frames all land in one bucket and
+    every p50/p95 the deadline-risk agent computes answers "somewhere between 100 and
+    250 seconds", which is not an answer.
+    """
+    tel, reader = make()
+    for seconds in (120.0, 180.0, 240.0):
+        tel.record(RenderEvent.demo(kind=EventKind.FRAME_COMPLETE, duration_seconds=seconds))
+
+    point = collect(reader)[METRICS[Metric.FRAME_DURATION]].data.data_points[0]
+    assert tuple(point.explicit_bounds) == FRAME_DURATION_BUCKETS_SECONDS
+    # 120 -> (60, 120], 180 -> (120, 300], 240 -> (120, 300]: three frames, two buckets.
+    occupied = {i for i, count in enumerate(point.bucket_counts) if count}
+    assert len(occupied) == 2
 
 
 def test_oom_increments_frames_failed():
@@ -74,7 +114,9 @@ def test_oom_increments_frames_failed():
     assert point.value == 1
     # Job-level counter: no `frame`, no `worker`, or every failing frame opens its own
     # series and the "how far behind is this job" query has to aggregate them back.
-    assert set(point.attributes) == set(JOB_LABELS)
+    # Plus `reason`, which is the whole point of a failure counter.
+    assert set(point.attributes) == set(FAILURE_LABELS)
+    assert point.attributes["reason"] == "oom"
 
 
 def test_every_failure_kind_increments_frames_failed():
@@ -86,7 +128,9 @@ def test_every_failure_kind_increments_frames_failed():
     for kind in (EventKind.FRAME_FAILED, EventKind.OOM, EventKind.ENGINE_CRASH):
         tel, reader = make()
         tel.record(RenderEvent.demo(kind=kind, message="boom"))
-        assert collect(reader)[METRICS[Metric.FRAMES_FAILED]].data.data_points[0].value == 1
+        point = collect(reader)[METRICS[Metric.FRAMES_FAILED]].data.data_points[0]
+        assert point.value == 1
+        assert point.attributes["reason"] == kind.value
 
     tel, reader = make()
     tel.record(RenderEvent.demo(kind=EventKind.ASSET_MISSING, message="missing tex.exr"))
@@ -109,6 +153,60 @@ def test_zero_memory_is_a_reading_not_a_missing_value():
     tel.record(RenderEvent.demo(kind=EventKind.FRAME_START, memory_bytes=0))
 
     assert collect(reader)[METRICS[Metric.WORKER_MEMORY]].data.data_points[0].value == 0
+
+
+def test_each_failure_reason_gets_its_own_series():
+    """The diagnosis question is "OOM or engine crash", and it is a single query.
+
+    All three kinds on one job must land in three distinguishable series, not one
+    counter that says only "you lost three frames".
+    """
+    tel, reader = make()
+    for kind in (EventKind.FRAME_FAILED, EventKind.OOM, EventKind.OOM, EventKind.ENGINE_CRASH):
+        tel.record(RenderEvent.demo(kind=kind, message="boom"))
+
+    points = collect(reader)[METRICS[Metric.FRAMES_FAILED]].data.data_points
+    by_reason = {point.attributes["reason"]: point.value for point in points}
+    assert by_reason == {"frame_failed": 1, "oom": 2, "engine_crash": 1}
+
+
+def test_oom_carrying_a_memory_reading_hits_both_instruments():
+    """The exact case the fan-out is not an if/elif chain for.
+
+    ``parser.py`` builds precisely this event: an OOM whose line carried the `Mem:`
+    reading that explains it. An if/elif regression would drop the memory sample and
+    leave a memory investigation with a gap at the only moment that mattered.
+    """
+    tel, reader = make()
+    tel.record(
+        RenderEvent.demo(
+            kind=EventKind.OOM,
+            message="CUDA error: out of memory in cuMemAlloc",
+            memory_bytes=8_000_000_000,
+        )
+    )
+
+    metrics = collect(reader)
+    assert metrics[METRICS[Metric.WORKER_MEMORY]].data.data_points[0].value == 8_000_000_000
+    failure = metrics[METRICS[Metric.FRAMES_FAILED]].data.data_points[0]
+    assert failure.value == 1
+    assert failure.attributes["reason"] == "oom"
+
+
+def test_memory_gauge_overwrites_rather_than_accumulates():
+    """Last-value semantics, pinned.
+
+    A gauge substituted for an UpDownCounter would leave this suite green while every
+    memory series silently became a running total of every reading ever taken, and a
+    worker sized off that number would be provisioned against a fiction.
+    """
+    tel, reader = make()
+    tel.record(RenderEvent.demo(kind=EventKind.FRAME_START, memory_bytes=100))
+    tel.record(RenderEvent.demo(kind=EventKind.FRAME_START, memory_bytes=200))
+
+    points = collect(reader)[METRICS[Metric.WORKER_MEMORY]].data.data_points
+    assert len(points) == 1
+    assert points[0].value == 200
 
 
 def test_event_without_payload_emits_nothing():
