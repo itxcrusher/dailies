@@ -19,7 +19,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.3", "pytest-asyncio>=0.24", "ruff>=0.7"]
+# httpx: not a runtime dependency. Starlette's TestClient is an httpx client, so the
+# API route tests do not collect without it, and it is absent from FastAPI's base
+# install (it ships in fastapi[standard], which this project does not take).
+dev = ["pytest>=8.3", "pytest-asyncio>=0.24", "ruff>=0.7", "httpx>=0.27"]
 # >=1.20, not 1.0: the investigator was built and verified against google-adk 1.20.0's
 # actual surface (`LlmAgent.tools` accepting `BaseTool`, `FunctionTool` deriving its
 # declaration from a bound method's signature, `{name}` state injection into a string
