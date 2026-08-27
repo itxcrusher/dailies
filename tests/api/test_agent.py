@@ -9,7 +9,13 @@ is tested is everything the repo actually owns and can get wrong silently:
   string, that the parameter names the model will see are the wrapper's own, and that a
   call really lands on the wrapper;
 - the **prompt contract**: the four rules that make a diagnosis evidence-bound, and the
-  response schema that carries the evidence.
+  response schema that carries the evidence. The schema is exercised by validating
+  candidate answers against it rather than by reading its keys back, because the claim
+  the module makes is that an unevidenced diagnosis *fails validation*, and only a
+  validator can check that claim;
+- the **build-time refusals**: an unknown tool name, a repeated one, and an empty tool
+  set. Each is a failure that otherwise surfaces against a live Grafana or a live model,
+  and the empty one does not surface at all - it answers with no telemetry read.
 
 The ADK ``Agent`` is the real installed one (google-adk 1.20.0); nothing here is stubbed.
 No network: the Grafana session is a local fake, and building an agent never contacts a
@@ -17,8 +23,12 @@ model.
 """
 
 import json
+import subprocess
+import sys
+import textwrap
 from types import SimpleNamespace
 
+import jsonschema
 import pytest
 from dailies_api.agent import (
     DIAGNOSIS_SCHEMA,
@@ -72,6 +82,49 @@ def test_diagnosis_schema_evidence_entries_name_the_query_and_the_finding():
     evidence = DIAGNOSIS_SCHEMA["properties"]["evidence"]
     assert evidence["type"] == "array"
     assert set(evidence["items"]["properties"]) == {"query", "finding"}
+
+
+def _diagnosis(**overrides):
+    answer = {
+        "shot": "SH040",
+        "cause": "The renderer ran out of GPU memory on the heaviest frames.",
+        "evidence": [
+            {
+                "query": 'render_frame_gpu_bytes{shot="SH040"}',
+                "finding": "Frames 118-124 peak at 23.4 GiB against a 24 GiB card.",
+            }
+        ],
+        "confidence": "high",
+    }
+    answer.update(overrides)
+    return answer
+
+
+def test_a_complete_diagnosis_validates():
+    """The guard below only means something if a real answer still gets through."""
+    jsonschema.validate(_diagnosis(), DIAGNOSIS_SCHEMA)
+
+
+@pytest.mark.parametrize(
+    ("evidence", "why"),
+    [
+        ([], "a cause with no evidence at all"),
+        ([{}], "an evidence entry that is empty"),
+        ([{"finding": "it broke"}], "a finding with no query behind it"),
+        ([{"query": "up"}], "a query with nothing recorded from it"),
+    ],
+    ids=["empty-array", "empty-entry", "finding-without-query", "query-without-finding"],
+)
+def test_an_unevidenced_diagnosis_is_a_schema_violation(evidence, why):
+    """The docstring claims the schema *enforces* this, so the schema must, not the prose.
+
+    Every one of these validated before ``minItems`` and the item-level ``required``
+    were added: the array keyword said only "array of objects", so the exact failure
+    the module exists to prevent was schema-legal and the constraint lived only in the
+    instruction, which is the part a model is free to ignore.
+    """
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(_diagnosis(evidence=evidence), DIAGNOSIS_SCHEMA)
 
 
 def test_diagnosis_schema_confidence_is_a_closed_set_including_low():
@@ -146,6 +199,19 @@ def test_every_declared_grafana_tool_resolves_to_a_wrapper_method():
         assert callable(getattr(GrafanaMCP, name, None)), name
 
 
+def test_get_panel_image_is_not_on_the_allow_list():
+    """It is a real wrapper method, which is exactly why its absence needs pinning.
+
+    ``get_panel_image`` answers with an MCP image block and the wrapper hands back
+    ``PanelImage`` bytes, which a function response cannot carry back to the model.
+    Every other test here iterates the allow-list, so adding the name would leave the
+    suite green and fail against a live model instead. Pixels go to the validation
+    path, which consumes the PNG directly.
+    """
+    assert callable(getattr(GrafanaMCP, "get_panel_image", None))
+    assert "get_panel_image" not in GRAFANA_MCP_TOOLS
+
+
 def test_all_declared_tools_can_be_wired():
     agent = build_investigator(mcp_tools=sorted(GRAFANA_MCP_TOOLS))
     assert sorted(t.name for t in agent.tools) == sorted(GRAFANA_MCP_TOOLS)
@@ -162,6 +228,36 @@ def test_a_wrapper_method_that_is_not_an_mcp_tool_is_rejected():
     """``available_tools`` is a real method on the wrapper and not a Grafana tool."""
     with pytest.raises(ValueError):
         build_investigator(mcp_tools=["available_tools"])
+
+
+def test_a_repeated_tool_name_fails_at_build_time():
+    """Gemini 400s on two function declarations sharing a name.
+
+    Same failure class as a typo'd name, so it belongs in the same place: here, not on
+    the agent's first live turn.
+    """
+    with pytest.raises(ValueError) as excinfo:
+        build_investigator(mcp_tools=["query_prometheus", "query_prometheus"])
+    assert "query_prometheus" in str(excinfo.value)
+
+
+def test_a_repeated_prebuilt_tool_fails_at_build_time():
+    """The duplicate can arrive already wrapped, not just as a repeated string."""
+    prebuilt = build_investigator(mcp_tools=["query_loki_logs"]).tools[0]
+    with pytest.raises(ValueError):
+        build_investigator(mcp_tools=[prebuilt, "query_loki_logs"])
+
+
+def test_an_investigator_with_no_tools_is_refused():
+    """The one failure that is otherwise silent.
+
+    A toolless agent still builds, still runs, and still answers - from the prompt
+    alone, with no telemetry read. That is the exact outcome this module is written to
+    prevent, so it has to be a build-time error.
+    """
+    with pytest.raises(ValueError) as excinfo:
+        build_investigator(mcp_tools=[])
+    assert "query_prometheus" in str(excinfo.value)
 
 
 def test_prebuilt_tools_pass_through_untouched():
@@ -249,3 +345,44 @@ def test_output_schema_is_not_set():
     any telemetry.
     """
     assert build_investigator(mcp_tools=["query_prometheus"]).output_schema is None
+
+
+# -- import surface --------------------------------------------------------------
+
+
+def test_importing_without_the_adk_names_the_optional_extra():
+    """google-adk is an extra, so a plain install hits this import first.
+
+    A bare ``No module named 'google.adk'`` does not tell the caller that an extra
+    exists or what it is called, and this repo holds its other errors to the standard
+    of naming the fix (see ``GrafanaNotConfigured``). Run in a subprocess because the
+    check is about import time and the ADK is already imported in this one.
+    """
+    script = textwrap.dedent(
+        """
+        import builtins
+        import sys
+
+        real_import = builtins.__import__
+
+        def blocked(name, *args, **kwargs):
+            if name == "google.adk" or name.startswith("google.adk."):
+                raise ImportError("No module named 'google.adk'")
+            return real_import(name, *args, **kwargs)
+
+        builtins.__import__ = blocked
+        for module in [m for m in sys.modules if m.startswith("google.adk")]:
+            del sys.modules[module]
+
+        try:
+            import dailies_api.agent  # noqa: F401
+        except ImportError as exc:
+            print(exc)
+        else:
+            print("IMPORTED ANYWAY")
+        """
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, check=True
+    )
+    assert 'pip install "dailies[agent]"' in completed.stdout

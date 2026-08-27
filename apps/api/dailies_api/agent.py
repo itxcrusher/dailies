@@ -8,9 +8,11 @@ diagnosis: it is a confident sentence that a human will act on.
 
 Three things enforce that:
 
-1. **The response schema** (:data:`DIAGNOSIS_SCHEMA`). ``evidence`` is required, and each
-   entry pairs the query that was run with what it showed. A cause with an empty evidence
-   list is a schema violation, not a stylistic lapse.
+1. **The response schema** (:data:`DIAGNOSIS_SCHEMA`). ``evidence`` is required, may
+   not be empty (``minItems``), and every entry must carry both the query that was run
+   and what it showed (``required`` on the item). A cause with no evidence behind it is a
+   schema violation, not a stylistic lapse, and each of those three constraints is pinned
+   by a test that validates a candidate answer against the schema.
 2. **The instruction** (:data:`INVESTIGATOR_INSTRUCTION`). The rules that a model will
    otherwise break under pressure to be helpful: no unsupported cause, report
    disagreement rather than resolving it by preference, a completed frame is not a
@@ -33,12 +35,26 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable
 from types import MethodType
-from typing import Any, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn
 
-from google.adk.agents import Agent
-from google.adk.tools import FunctionTool
+try:
+    from google.adk.agents import Agent
+    from google.adk.tools import FunctionTool
+except ImportError as exc:  # the ADK is an optional extra; say which one.
+    raise ImportError(
+        "dailies_api.agent needs the Google ADK, which this project ships in its "
+        'optional "agent" extra rather than its base dependencies. Install it with: '
+        'pip install "dailies[agent]"'
+    ) from exc
 
 from dailies_api.mcp_client import GrafanaMCP
+
+if TYPE_CHECKING:
+    # ADK's own alias for what ``LlmAgent.tools`` accepts: a ``BaseTool``, a
+    # ``BaseToolset`` such as ``McpToolset``, or a plain callable. Naming it is what
+    # lets ``mcp_tools`` say something more useful than ``Any``, and keeping the import
+    # annotation-only means an upstream rename cannot break importing this module.
+    from google.adk.agents.llm_agent import ToolUnion
 
 __all__ = [
     "DIAGNOSIS_SCHEMA",
@@ -88,9 +104,10 @@ GRAFANA_MCP_TOOLS = frozenset(
 #:
 #: ``evidence`` is the load-bearing field and the reason this schema exists. A model asked
 #: for a cause will produce a plausible one whether or not it looked; a model asked for a
-#: cause *and* the queries behind it has to either do the work or visibly leave the array
-#: empty. ``confidence`` is a closed set including ``"low"`` so that uncertainty has
-#: somewhere to go other than into hedged prose in ``cause``.
+#: cause *and* the queries behind it has to either do the work or emit an answer that
+#: fails validation in a way anyone can see. ``confidence`` is a closed set including
+#: ``"low"`` so that uncertainty has somewhere to go other than into hedged prose in
+#: ``cause``.
 DIAGNOSIS_SCHEMA: dict[str, Any] = {
     "type": "object",
     "required": ["shot", "cause", "evidence", "confidence"],
@@ -99,8 +116,13 @@ DIAGNOSIS_SCHEMA: dict[str, Any] = {
         "cause": {"type": "string", "description": "One sentence naming the root cause"},
         "evidence": {
             "type": "array",
+            # An answer with no evidence, or a finding with no query behind it, is
+            # exactly the failure this schema exists to catch. Without these two
+            # keywords both validate, and the constraint lives only in the prose.
+            "minItems": 1,
             "items": {
                 "type": "object",
+                "required": ["query", "finding"],
                 "properties": {
                     "query": {"type": "string"},
                     "finding": {"type": "string"},
@@ -220,8 +242,31 @@ def _grafana_tool(name: str, client: GrafanaMCP | _Unconfigured) -> FunctionTool
     return FunctionTool(MethodType(getattr(GrafanaMCP, name), client))
 
 
+def _reject_duplicate_tool_names(tools: list[Any]) -> None:
+    """Raise if two resolved tools would declare the same function name to Gemini.
+
+    The Gemini API rejects a request whose function declarations share a name, so a
+    repeated tool is the same failure class as a typo'd one and belongs at the same
+    place: build time, not the agent's first live turn. A toolset or a plain callable
+    has no ``name`` attribute of its own - it resolves its declarations later - so it is
+    skipped here rather than guessed at.
+    """
+    seen: set[str] = set()
+    for tool in tools:
+        name = getattr(tool, "name", None)
+        if name is None:
+            continue
+        if name in seen:
+            raise ValueError(
+                f"{name!r} was given to build_investigator() more than once. Gemini "
+                "rejects a request whose function declarations share a name, so this "
+                "agent would fail on its first turn."
+            )
+        seen.add(name)
+
+
 def build_investigator(
-    mcp_tools: Iterable[Any],
+    mcp_tools: Iterable[str | ToolUnion],
     *,
     grafana: GrafanaMCP | None = None,
     model: str = INVESTIGATOR_MODEL,
@@ -240,15 +285,25 @@ def build_investigator(
         name: The ADK agent name, which must be a valid Python identifier.
 
     Raises:
-        ValueError: If a tool name is not one this project wraps. Deliberately at build
-            time: a typo in a tool name is otherwise a runtime failure against a live
-            Grafana, which in practice means mid-demo.
+        ValueError: If a tool name is not one this project wraps, if the same tool is
+            given twice, or if the resolved tool set is empty. Deliberately at build
+            time: every one of those is otherwise a runtime failure against a live
+            Grafana or a live model, which in practice means mid-demo. An investigator
+            with no tools is the worst of the three, because it does not fail at all -
+            it reads no telemetry and answers anyway.
     """
     client: GrafanaMCP | _Unconfigured = _UNCONFIGURED if grafana is None else grafana
     tools = [
         _grafana_tool(item, client) if isinstance(item, str) else item
         for item in mcp_tools
     ]
+    if not tools:
+        raise ValueError(
+            "build_investigator() needs at least one tool; an investigator with none "
+            "has no telemetry to read and would answer from the prompt alone. "
+            f"Available Grafana tools: {', '.join(sorted(GRAFANA_MCP_TOOLS))}."
+        )
+    _reject_duplicate_tool_names(tools)
     return Agent(
         name=name,
         model=model,
