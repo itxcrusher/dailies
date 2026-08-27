@@ -14,13 +14,26 @@ hold the current picture and hand it to the API.
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 from threading import RLock
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import BaseModel, Field
 
 __all__ = ["Risk", "Shot", "ShotStore"]
+
+#: One component of a shot id: what a project, sequence, shot or job may be spelled with.
+#: Deliberately narrow. These characters survive a URL path segment untouched, so an id
+#: built from them reads the same in a log line, a browser address bar and a `curl`.
+_ID_COMPONENT = re.compile(r"[A-Za-z0-9._-]+")
+
+#: A whole shot id: one or more components joined by ``:``. Written out rather than
+#: derived from ``_ID_COMPONENT`` because pydantic hands the pattern to a Rust regex
+#: engine, and a pattern assembled at import time is one nobody can read in the schema.
+#: A single component is legal so a bare label stays constructible in a test or a
+#: fixture; production ids come from :meth:`Shot.make_id`.
+_ID_PATTERN = r"^[A-Za-z0-9._-]+(?::[A-Za-z0-9._-]+)*$"
 
 
 class Risk(StrEnum):
@@ -64,7 +77,18 @@ class Shot(BaseModel):
     which is the only bound that is a wiring bug rather than a render oddity.
     """
 
-    id: str = Field(min_length=1, description="Shot identifier, e.g. 'SH040'")
+    id: str = Field(
+        min_length=1,
+        pattern=_ID_PATTERN,
+        description=(
+            "The composite render identity, not the bare shot label: "
+            "'project:sequence:shot:render_job', as built by Shot.make_id. Telemetry keys "
+            "every render series by those four fields (dailies_telemetry.schema.RenderEvent), "
+            "so keying the board by shot label alone would merge two jobs rendering the same "
+            "shot into one row of mixed numbers. Path-safe characters only (A-Za-z0-9._-), "
+            "joined by ':', because the id is addressed as a URL path segment."
+        ),
+    )
     frames_total: int = Field(ge=0, description="Frames in the shot's range")
     frames_done: int = Field(default=0, ge=0, description="Frames finished so far")
     risk: Risk = Field(
@@ -81,9 +105,51 @@ class Shot(BaseModel):
         ),
     )
 
+    #: What :meth:`make_id` joins identity components with. Not one of the characters a
+    #: component may contain, so an id built here can never be mistaken for a bare label.
+    ID_SEPARATOR: ClassVar[str] = ":"
+
+    #: The identity fields, in the order they appear in an id. The same four that
+    #: telemetry keys a render series by; keeping the order fixed is what makes an id
+    #: sortable into project/sequence order on the board.
+    ID_FIELDS: ClassVar[tuple[str, ...]] = ("project", "sequence", "shot", "render_job")
+
+    @classmethod
+    def make_id(cls, project: str, sequence: str, shot: str, render_job: str) -> str:
+        """Build the composite id for one shot of one render job.
+
+        The bare shot label is not unique: a shot is routinely re-rendered while the
+        previous job is still running, and two jobs writing to one store key would leave
+        the board showing a single row of interleaved frame counts with no way to tell
+        which job it belonged to. Joining the four fields telemetry already keys by makes
+        the collision impossible instead of merely unlikely.
+
+        Raises:
+            ValueError: if a component is empty or carries a character an id cannot, the
+                separator included. Refusing here keeps a malformed id from reaching the
+                store, where it would only surface as a 404 on a shot the list endpoint
+                is plainly showing.
+        """
+        parts = (project, sequence, shot, render_job)
+        bad = [
+            f"{name}={value!r}"
+            for name, value in zip(cls.ID_FIELDS, parts, strict=True)
+            if not _ID_COMPONENT.fullmatch(value)
+        ]
+        if bad:
+            raise ValueError(
+                "Shot id components must be non-empty and spelled with A-Za-z0-9._- only; "
+                f"got {', '.join(bad)}"
+            )
+        return cls.ID_SEPARATOR.join(parts)
+
 
 class ShotStore:
-    """The current standing of every shot being watched, keyed by shot id.
+    """The current standing of every shot being watched, keyed by :attr:`Shot.id`.
+
+    The key is the composite render identity, not the bare shot label, so re-rendering a
+    shot while the previous job is still running gives the board two rows rather than one
+    row of two jobs' numbers.
 
     Insertion-ordered: the board shows shots in the order the render submitted them,
     which is the order a supervisor already has in their head. Re-upserting an existing

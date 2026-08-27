@@ -10,6 +10,9 @@ contract the board and the Guardian both code against, not FastAPI itself:
   failure this pins.
 - the **injected store**. ``create_app`` takes the store so a test never touches global
   state and two apps in one process cannot see each other's shots.
+- the **shot id**. It is the composite render identity and it has to survive a URL path
+  segment, so an id the detail route could never address is rejected where it is built
+  rather than 404ing later, and two jobs on one shot stay two rows.
 
 No network and no model: the store is in-memory and the routes are driven through
 ``TestClient``.
@@ -181,3 +184,59 @@ def test_shot_rejects_negative_frame_counts():
         Shot(id="SH010", frames_total=-1)
     with pytest.raises(ValidationError):
         Shot(id="SH010", frames_total=10, frames_done=-1)
+
+
+# --- shot id: addressable, and unique per render job ---------------------------------
+
+
+@pytest.mark.parametrize("bad_id", ["proj/SH040", "SH 040", "SH040?x=1", "SH040#a", "../etc"])
+def test_shot_rejects_an_id_the_detail_route_could_not_address(bad_id):
+    # The bug this pins: such an id used to construct fine, be listed by GET /api/shots,
+    # and then 404 on GET /api/shots/<id> with a detail telling the caller to check the
+    # list it was plainly in.
+    with pytest.raises(ValidationError):
+        Shot(id=bad_id, frames_total=10)
+
+
+def test_a_composite_id_is_addressable_on_the_detail_route():
+    store = ShotStore()
+    shot_id = Shot.make_id("bluebird", "SEQ01", "SH040", "job-1")
+    store.upsert(Shot(id=shot_id, frames_total=240))
+
+    listed = _client(store).get("/api/shots").json()["shots"][0]["id"]
+    assert listed == shot_id
+    # Every id the list endpoint hands out must round-trip through the detail route.
+    assert _client(store).get(f"/api/shots/{listed}").status_code == 200
+
+
+def test_make_id_joins_the_four_fields_telemetry_keys_a_render_by():
+    assert Shot.make_id("bluebird", "SEQ01", "SH040", "job-1") == "bluebird:SEQ01:SH040:job-1"
+    assert Shot.ID_FIELDS == ("project", "sequence", "shot", "render_job")
+
+
+@pytest.mark.parametrize(
+    "parts",
+    [
+        ("", "SEQ01", "SH040", "job-1"),
+        ("blue/bird", "SEQ01", "SH040", "job-1"),
+        ("bluebird", "SEQ01", "SH040", "job:1"),
+        ("bluebird", "SEQ 01", "SH040", "job-1"),
+    ],
+)
+def test_make_id_rejects_a_component_that_would_corrupt_the_id(parts):
+    with pytest.raises(ValueError):
+        Shot.make_id(*parts)
+
+
+def test_two_jobs_rendering_the_same_shot_are_two_rows():
+    # Keyed by shot label alone these would land on one store key and the board would show
+    # one row of interleaved frame counts.
+    store = ShotStore()
+    first = Shot.make_id("bluebird", "SEQ01", "SH040", "job-1")
+    retry = Shot.make_id("bluebird", "SEQ01", "SH040", "job-2")
+    store.upsert(Shot(id=first, frames_total=240, frames_done=96, risk=Risk.AT_RISK))
+    store.upsert(Shot(id=retry, frames_total=240, frames_done=4))
+
+    assert [shot.id for shot in store.all()] == [first, retry]
+    assert store.get(first).frames_done == 96
+    assert store.get(retry).risk is Risk.ON_TRACK
