@@ -10,7 +10,15 @@ frame number carrying forward onto lines that do not name one).
 from collections.abc import Iterable
 
 import pytest
-from dailies_render.backend import RenderBackend
+from dailies_render.backend import (
+    BackendError,
+    BackendUnavailable,
+    JobNotFound,
+    Priority,
+    RenderBackend,
+    TaskNotFound,
+    UnsupportedOperation,
+)
 from dailies_render.blender import render_from_stream
 from dailies_telemetry.schema import UNKNOWN, EventKind, RenderEvent
 
@@ -108,7 +116,7 @@ class FakeBackend:
     def __init__(self) -> None:
         self.retried: list[tuple[str, str]] = []
         self.cancelled: list[tuple[str, str]] = []
-        self.priorities: list[tuple[str, str]] = []
+        self.priorities: list[tuple[str, Priority]] = []
 
     def list_jobs(self) -> list[dict]:
         return [{"id": "job-1", "shot": "SH010", "state": "running"}]
@@ -125,11 +133,13 @@ class FakeBackend:
     def cancel_task(self, job_id: str, task_id: str) -> None:
         self.cancelled.append((job_id, task_id))
 
-    def change_priority(self, job_id: str, priority: str) -> None:
+    def change_priority(self, job_id: str, priority: Priority) -> None:
         self.priorities.append((job_id, priority))
 
-    def get_output(self, job_id: str) -> list[str]:
-        return [f"/out/{job_id}_0001.png"]
+    def get_output_frames(self, job_id: str) -> list[str]:
+        # A URI, not a farm-local path: the contract is that a caller can resolve one
+        # without knowing which backend produced it.
+        return [f"file:///out/{job_id}_0001.png"]
 
     def get_logs(self, job_id: str) -> Iterable[str]:
         return iter(SAMPLE)
@@ -168,7 +178,7 @@ def test_backend_declares_the_full_scheduler_surface():
         "retry_task",
         "cancel_task",
         "change_priority",
-        "get_output",
+        "get_output_frames",
         "get_logs",
     }
 
@@ -186,3 +196,82 @@ def test_protocol_cannot_be_instantiated():
     with pytest.raises(TypeError):
         RenderBackend()  # type: ignore[abstract]
 
+
+# --- the error taxonomy -------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "error", [JobNotFound, TaskNotFound, BackendUnavailable, UnsupportedOperation]
+)
+def test_every_declared_error_is_catchable_as_backend_error(error):
+    """One `except BackendError` above the seam must be enough.
+
+    If any of these sat outside the base, a caller would have to enumerate them and
+    would silently miss the next one an adapter starts raising.
+    """
+    assert issubclass(error, BackendError)
+
+
+def test_backend_error_is_an_exception_not_a_bare_class():
+    assert issubclass(BackendError, Exception)
+
+
+def test_the_taxonomy_distinguishes_missing_from_unreachable():
+    """`JobNotFound` and `BackendUnavailable` must not be catchable as one another.
+
+    They demand opposite recoveries: stop tracking the job, versus retry because
+    nothing is actually known about it. Collapsing them is how a transient farm outage
+    turns into a wrongly abandoned render.
+    """
+    assert not issubclass(JobNotFound, BackendUnavailable)
+    assert not issubclass(BackendUnavailable, JobNotFound)
+
+
+def test_a_partial_adapter_can_refuse_an_operation_without_leaking_its_vendor_error():
+    """An adapter whose scheduler has no per-task retry has a declared way to say so."""
+
+    class RetrylessBackend(FakeBackend):
+        def retry_task(self, job_id: str, task_id: str) -> None:
+            raise UnsupportedOperation("this scheduler cannot retry a single task")
+
+    backend: RenderBackend = RetrylessBackend()
+    with pytest.raises(BackendError):
+        backend.retry_task("job-1", "task-1")
+
+
+# --- the priority vocabulary --------------------------------------------------
+
+
+def test_priority_is_a_shared_named_vocabulary():
+    """The label a dashboard matches on and the command the agent sends must agree.
+
+    `RenderEvent.priority` and `RenderBackend.change_priority` draw on the same enum,
+    so "bump this job to high" means one thing on every farm.
+    """
+    assert [p.value for p in Priority] == ["low", "normal", "high", "urgent"]
+    assert RenderEvent.demo().priority == Priority.NORMAL
+
+
+def test_priority_values_are_strings_adapters_can_map():
+    backend = FakeBackend()
+    backend.change_priority("job-1", Priority.URGENT)
+    assert backend.priorities == [("job-1", "urgent")]
+
+
+def test_a_parsed_event_keeps_the_unknown_priority_sentinel():
+    """`UNKNOWN` is deliberately outside the vocabulary: stdout never names a tier."""
+    assert UNKNOWN not in {p.value for p in Priority}
+
+
+# --- the output contract ------------------------------------------------------
+
+
+def test_output_frames_are_resolvable_uris_not_farm_local_paths():
+    """Two adapters returning `/out/x.png` and `gs://.../x.png` would both be "right".
+
+    The consumer (the delivery board, the validation agent) cannot resolve a bare
+    absolute path off the worker that wrote it, and no type error would catch the
+    disagreement, so the contract is written down and tested.
+    """
+    (frame,) = FakeBackend().get_output_frames("job-1")
+    assert "://" in frame

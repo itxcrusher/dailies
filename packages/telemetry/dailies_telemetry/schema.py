@@ -40,6 +40,26 @@ class Metric(StrEnum):
     DEADLINE_SLACK = "deadline_slack"
 
 
+class Priority(StrEnum):
+    """The priority vocabulary shared by the telemetry label and the backend command.
+
+    One vocabulary, two consumers: ``RenderEvent.priority`` is the label Grafana shows
+    and ``RenderBackend.change_priority`` is the command the recovery agent sends. A
+    bare ``str`` on either side lets them diverge silently, so the agent could raise a
+    job to a tier no dashboard rule matches. It lives here rather than beside the
+    backend protocol because this is the layer both sides already import.
+
+    Named tiers, not numbers: schedulers disagree on which direction a numeric priority
+    points (Deadline counts up, other queues count down), and an adapter can map a name
+    onto its own scale while a caller cannot guess which way a bare integer runs.
+    """
+
+    LOW = "low"
+    NORMAL = "normal"
+    HIGH = "high"
+    URGENT = "urgent"
+
+
 METRICS: Final[Mapping[Metric, str]] = MappingProxyType(
     {
         Metric.FRAME_DURATION: "render_frame_duration_seconds",
@@ -164,7 +184,10 @@ class RenderEvent(BaseModel):
     # Descriptive labels. Defaults here are safe; they do not identify the emitter.
     renderer: str = "cycles"
     scene: str = "Scene"
-    priority: str = "normal"
+    #: Typed ``str`` rather than ``Priority`` on purpose: the parser cannot read a
+    #: priority off a line of stdout and writes ``UNKNOWN`` there, which is deliberately
+    #: outside the vocabulary. ``Priority`` is what a producer that DOES know sends.
+    priority: str = Priority.NORMAL.value
     # Payload. Not labels.
     duration_seconds: float | None = Field(default=None, ge=0)
     memory_bytes: int | None = Field(default=None, ge=0)
