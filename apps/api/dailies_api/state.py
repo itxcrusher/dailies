@@ -95,10 +95,12 @@ class ShotStore:
     iterating the board cannot be surprised mid-render. Changing a shot means upserting
     it, which is the only path that takes the lock.
 
-    Locked with an ``RLock`` because FastAPI runs sync route handlers in a threadpool, so
-    two requests genuinely do touch this concurrently. Individual dict operations are
-    atomic under the GIL, but ``all()`` copying every value while another thread upserts
-    is not, and that is the read the board makes on every poll.
+    Locked because FastAPI runs sync route handlers in a threadpool, so two requests
+    genuinely do touch this concurrently. Individual dict operations are atomic under the
+    GIL, but ``all()`` copying every value while another thread upserts is not, and that
+    is the read the board makes on every poll. ``RLock`` rather than ``Lock`` so that a
+    later method built out of the existing ones (a bulk upsert, a "get or create") cannot
+    deadlock against itself; nothing here re-enters today.
     """
 
     __slots__ = ("_lock", "_shots")
@@ -135,9 +137,6 @@ class ShotStore:
         return None if shot is None else shot.model_copy(deep=True)
 
     def __len__(self) -> int:
+        """How many shots are being watched. The 404 path reports this."""
         with self._lock:
             return len(self._shots)
-
-    def __contains__(self, shot_id: object) -> bool:
-        with self._lock:
-            return shot_id in self._shots

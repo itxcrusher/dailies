@@ -8,7 +8,11 @@ disagreed there would be no way to tell which one was right.
 
 ``create_app`` takes the store rather than reaching for a module-level one so the app has
 no global state to leak between tests, and so a process can run two boards over two stores
-without them seeing each other's shots.
+without them seeing each other's shots. That is why there is no module-level ``app`` to
+point a server at: a server takes the factory instead, and reaches the store it built
+through ``app.state.shots``::
+
+    uvicorn dailies_api.main:create_app --factory --port 8080
 """
 
 from __future__ import annotations
