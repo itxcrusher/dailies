@@ -25,8 +25,9 @@ rather than to the model's plausible-looking ``cycles``/``Scene``/``normal``.
 
 **A sentinel must not collide with a real reading.** A missing measurement is ``None``,
 never zero: Blender legitimately reports ``Mem:0.00M`` while synchronizing, so a zero
-memory reading has to stay a reading. The one surviving sentinel of that shape is
-``frame_hint``, which is documented at the parameter.
+memory reading has to stay a reading. ``frame_hint`` obeys the same rule - it is
+``None`` until a ``Fra:`` line has been seen, because ``--frame-start 0`` is legal and
+a crash during scene load must not be filed against a real frame 0.
 """
 
 import re
@@ -96,7 +97,7 @@ def _progress(line: str) -> Progress | None:
 def parse_line(
     line: str,
     shot: str,
-    frame_hint: int = 0,
+    frame_hint: int | None = None,
     *,
     project: str = UNKNOWN,
     sequence: str = UNKNOWN,
@@ -109,7 +110,9 @@ def parse_line(
     """Parse one line of Blender CLI output into a ``RenderEvent``, or ``None``.
 
     ``frame_hint`` is the frame the caller believes is in flight; it is used when the
-    line itself does not name one (most failure lines do not).
+    line itself does not name one (most failure lines do not). ``None`` means no frame
+    is known yet, and the event carries ``frame=None`` rather than a plausible-looking
+    zero: frame 0 is a frame Blender genuinely renders.
     """
     identity = {
         "shot": shot,

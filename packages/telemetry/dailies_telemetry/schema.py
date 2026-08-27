@@ -136,6 +136,16 @@ _DEMO_IDENTITY: Final[Mapping[str, object]] = MappingProxyType(
 )
 
 
+def _label_value(value: object) -> str:
+    """Render one field as a label value, mapping "not known" onto ``UNKNOWN``.
+
+    ``frame`` is the only label field that can be ``None`` (no ``Fra:`` line has been
+    seen yet). ``str(None)`` would put a literal ``"None"`` into a Grafana series;
+    ``UNKNOWN`` is the sentinel every consumer already tests against.
+    """
+    return UNKNOWN if value is None else str(value)
+
+
 class RenderEvent(BaseModel):
     kind: EventKind
     # Identity. Required: these decide which series the sample lands in.
@@ -144,7 +154,13 @@ class RenderEvent(BaseModel):
     shot: str
     render_job: str
     worker: str
-    frame: int = Field(ge=0)
+    #: ``None`` means "no frame is known yet", not frame zero. Frame 0 is a legal
+    #: frame (Blender renders ``--frame-start 0`` for hold and reference frames), so it
+    #: cannot double as the sentinel: a failure printed before the first ``Fra:`` line
+    #: (asset resolution at scene load) must not be reported as a genuine frame-0
+    #: failure. Same rule as ``duration_seconds`` and ``memory_bytes`` below, and the
+    #: same reason: a missing value must never be a plausible reading.
+    frame: int | None = Field(ge=0)
     # Descriptive labels. Defaults here are safe; they do not identify the emitter.
     renderer: str = "cycles"
     scene: str = "Scene"
@@ -181,7 +197,7 @@ class RenderEvent(BaseModel):
         drifting apart is a bug, and it must surface here rather than as a mismatched
         registration far away in the exporter.
         """
-        return {name: str(getattr(self, name)) for name in names}
+        return {name: _label_value(getattr(self, name)) for name in names}
 
     def frame_labels(self) -> dict[str, str]:
         return self.labels(FRAME_LABELS)

@@ -12,7 +12,7 @@ from collections.abc import Iterable
 import pytest
 from dailies_render.backend import RenderBackend
 from dailies_render.blender import render_from_stream
-from dailies_telemetry.schema import EventKind
+from dailies_telemetry.schema import UNKNOWN, EventKind, RenderEvent
 
 SAMPLE = [
     "Blender 4.2.1",
@@ -51,6 +51,50 @@ def test_render_from_stream_is_lazy():
 def test_shot_reaches_every_event():
     events = list(render_from_stream(iter(SAMPLE), shot="SH010"))
     assert {e.shot for e in events} == {"SH010"}
+
+
+FRAME_ZERO_SAMPLE = [
+    "Fra:12 Mem:120.00M (Peak 200.00M) | Time:00:01.00 | Rendering 1 / 16 samples",
+    "Fra:0 Mem:130.00M (Peak 200.00M) | Time:00:01.00 | Rendering 1 / 16 samples",
+    "Error: engine not found 'CYCLES'",
+]
+
+
+def test_frame_zero_is_carried_forward_like_any_other_frame():
+    """Regression: the wrapper tested the frame for truthiness, so 0 read as "unset".
+
+    Frame 0 is legal (``frame: int | None = Field(ge=0)``, and Blender renders
+    ``--frame-start 0`` for hold and reference frames). The truthiness test sent a
+    genuine ``Fra:0`` line down the else branch, overwrote its correct frame with the
+    stale hint, and then misattributed every following unnumbered warning and crash to
+    that same stale frame - the one behaviour this wrapper exists to get right.
+    """
+    frames = [e.frame for e in render_from_stream(iter(FRAME_ZERO_SAMPLE), shot="SH010")]
+    assert frames == [12, 0, 0]
+
+
+def test_a_failure_before_the_first_frame_line_is_not_reported_as_frame_zero():
+    """Scene-load failures print before any ``Fra:`` line and name no frame.
+
+    Emitting them as frame 0 would make them indistinguishable from a genuine frame-0
+    failure, which is the plausible-sentinel trap the parser's own rules forbid.
+    """
+    stream = ["Warning: Unable to open file '/assets/jacket_diffuse.exr'"]
+    (event,) = render_from_stream(iter(stream), shot="SH010")
+    assert event.kind is EventKind.ASSET_MISSING
+    assert event.frame is None
+    assert event.frame_labels()["frame"] == UNKNOWN
+
+
+def test_the_wrapper_does_not_mutate_the_parsed_event():
+    """The old else branch assigned through the model, bypassing validation entirely.
+
+    ``RenderEvent`` has no ``validate_assignment``, so a post-construction write of
+    ``frame`` was unchecked; nothing the wrapper does may depend on that.
+    """
+    events = list(render_from_stream(iter(SAMPLE), shot="SH010"))
+    for event in events:
+        assert RenderEvent.model_validate(event.model_dump()) == event
 
 
 class FakeBackend:
@@ -141,3 +185,4 @@ def test_backend_annotation_accepts_the_fake():
 def test_protocol_cannot_be_instantiated():
     with pytest.raises(TypeError):
         RenderBackend()  # type: ignore[abstract]
+

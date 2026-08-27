@@ -170,8 +170,25 @@ def test_a_frame_number_on_the_line_beats_the_hint():
     assert e.memory_bytes == (15000 * 1024**2)
 
 
-def test_frame_hint_defaults_to_zero():
-    assert parse_line("Segmentation fault", shot="SH010").frame == 0
+def test_frame_hint_defaults_to_no_frame():
+    """Regression: the default used to be 0, which is a frame Blender really renders.
+
+    A crash printed before the first ``Fra:`` line (asset resolution during scene load)
+    was reported as ``frame=0`` and was indistinguishable from a genuine frame-0
+    failure. ``None`` is the sentinel, matching duration_seconds and memory_bytes.
+    """
+    assert parse_line("Segmentation fault", shot="SH010").frame is None
+
+
+def test_frame_zero_is_a_real_hint_not_an_absent_one():
+    """``--frame-start 0`` is legal, so a hint of 0 must be used, not treated as unset."""
+    assert parse_line("Segmentation fault", shot="SH010", frame_hint=0).frame == 0
+
+
+def test_an_unknown_frame_labels_as_unknown_not_none():
+    """A ``frame="None"`` series in Grafana is a wiring bug wearing a plausible name."""
+    e = parse_line("Segmentation fault", shot="SH010")
+    assert e.frame_labels()["frame"] == UNKNOWN
 
 
 # --- the produced event is always a valid RenderEvent -------------------------
@@ -191,7 +208,7 @@ def test_every_event_satisfies_the_schema_contract(line):
     e = parse_line(line, shot="SH010")
     assert isinstance(e, BaseModel)
     assert e.shot == "SH010"
-    assert e.frame >= 0
+    assert e.frame is None or e.frame >= 0
 
 
 @pytest.mark.parametrize("line", ALL_INTERESTING_LINES)
