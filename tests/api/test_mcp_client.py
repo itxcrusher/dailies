@@ -7,8 +7,11 @@ were verified against grafana/mcp-grafana source on 2026-08-27, so a drift in ei
 should break these tests loudly rather than at runtime against a real stack.
 """
 
+import asyncio
 import base64
+import copy
 import json
+import pickle
 from types import SimpleNamespace
 
 import pytest
@@ -267,6 +270,7 @@ async def test_non_json_content_raises_a_clear_error_not_a_jsondecodeerror():
         await mcp.query_prometheus("up")
     assert caught.value.tool == "query_prometheus"
     assert caught.value.raw == "<html>502 Bad Gateway</html>"
+    assert caught.value.reason == MalformedToolResponse.NOT_JSON
     assert not isinstance(caught.value, json.JSONDecodeError)
 
 
@@ -276,6 +280,20 @@ async def test_a_result_with_no_text_block_raises_a_clear_error():
     with pytest.raises(MalformedToolResponse) as caught:
         await mcp.query_prometheus("up")
     assert caught.value.tool == "query_prometheus"
+    assert caught.value.reason == MalformedToolResponse.NO_TEXT
+
+
+async def test_a_result_with_no_text_block_says_what_did_come_back():
+    # An empty content list, an image block and an embedded resource are three different
+    # problems; without naming the blocks the message cannot tell them apart.
+    session = FakeSession(
+        {"query_prometheus": _Result([_Block(data="ignored", type="image")])}
+    )
+    mcp = GrafanaMCP(session=session, prometheus_uid="prom-uid")
+    with pytest.raises(MalformedToolResponse) as caught:
+        await mcp.query_prometheus("up")
+    assert "image" in caught.value.raw
+    assert "image" in str(caught.value)
 
 
 async def test_every_typed_error_is_catchable_as_one_base_class():
@@ -330,6 +348,7 @@ async def test_get_panel_image_without_an_image_block_raises_a_clear_error():
     with pytest.raises(MalformedToolResponse) as caught:
         await mcp.get_panel_image(dashboard_uid="dash-uid")
     assert caught.value.tool == "get_panel_image"
+    assert caught.value.reason == MalformedToolResponse.NO_IMAGE
 
 
 async def test_get_panel_image_surfaces_a_tool_error():
@@ -343,3 +362,144 @@ async def test_get_panel_image_surfaces_a_tool_error():
     mcp = GrafanaMCP(session=session)
     with pytest.raises(ToolCallFailed):
         await mcp.get_panel_image(dashboard_uid="dash-uid")
+
+
+async def test_get_panel_image_with_undecodable_data_raises_a_clear_error():
+    session = FakeSession(
+        {"get_panel_image": _Result([_Block(data="not!base64", type="image")])}
+    )
+    mcp = GrafanaMCP(session=session)
+    with pytest.raises(MalformedToolResponse) as caught:
+        await mcp.get_panel_image(dashboard_uid="dash-uid")
+    assert caught.value.tool == "get_panel_image"
+    assert caught.value.reason == MalformedToolResponse.BAD_BASE64
+    assert caught.value.raw == "not!base64"
+
+
+async def test_get_panel_image_keeps_a_huge_undecodable_blob_off_the_message():
+    blob = "!" * 5000
+    session = FakeSession({"get_panel_image": _Result([_Block(data=blob, type="image")])})
+    mcp = GrafanaMCP(session=session)
+    with pytest.raises(MalformedToolResponse) as caught:
+        await mcp.get_panel_image(dashboard_uid="dash-uid")
+    assert caught.value.raw == blob
+    assert len(str(caught.value)) < 1000
+
+
+async def test_a_text_block_that_is_not_a_link_is_not_treated_as_the_deeplink():
+    # The server puts the image first and the deeplink second today, but "first text block
+    # wins" would silently turn any future warning or notice into a broken link.
+    png = b"\x89PNG\r\n\x1a\nfake"
+    session = FakeSession(
+        {
+            "get_panel_image": _Result(
+                [
+                    _Block(text="panel rendered with a truncated time range"),
+                    _Block(data=base64.b64encode(png).decode(), type="image"),
+                ]
+            )
+        }
+    )
+    mcp = GrafanaMCP(session=session)
+    image = await mcp.get_panel_image(dashboard_uid="dash-uid")
+    assert image.png == png
+    assert image.deeplink is None
+
+
+async def test_the_deeplink_is_found_behind_a_non_link_text_block():
+    png = b"\x89PNG\r\n\x1a\nfake"
+    session = FakeSession(
+        {
+            "get_panel_image": _Result(
+                [
+                    _Block(data=base64.b64encode(png).decode(), type="image"),
+                    _Block(text="rendered at 800x600"),
+                    _Block(text="https://grafana.example/d/dash-uid?viewPanel=4"),
+                ]
+            )
+        }
+    )
+    mcp = GrafanaMCP(session=session)
+    image = await mcp.get_panel_image(dashboard_uid="dash-uid")
+    assert image.deeplink == "https://grafana.example/d/dash-uid?viewPanel=4"
+
+
+# --- the errors have to survive leaving the process ------------------------------
+
+
+def test_a_tool_error_survives_a_pickle_round_trip():
+    # Exception reconstruction goes through `args`. A process pool, a task queue or a
+    # deepcopy inside a retry decorator would otherwise turn this into an opaque
+    # TypeError, losing the tool name the class exists to carry.
+    error = ToolCallFailed("query_prometheus", "datasource not found")
+    revived = pickle.loads(pickle.dumps(error))
+    assert isinstance(revived, ToolCallFailed)
+    assert revived.tool == "query_prometheus"
+    assert revived.raw == "datasource not found"
+    assert str(revived) == str(error)
+
+
+def test_a_malformed_response_error_survives_a_pickle_round_trip():
+    error = MalformedToolResponse(
+        "get_panel_image", "<html>502</html>", MalformedToolResponse.NO_IMAGE
+    )
+    revived = pickle.loads(pickle.dumps(error))
+    assert isinstance(revived, MalformedToolResponse)
+    assert revived.tool == "get_panel_image"
+    assert revived.raw == "<html>502</html>"
+    assert revived.reason == MalformedToolResponse.NO_IMAGE
+    assert str(revived) == str(error)
+
+
+def test_a_typed_error_can_be_copied():
+    error = MalformedToolResponse("query_loki_logs", "boom", MalformedToolResponse.NOT_JSON)
+    for clone in (copy.copy(error), copy.deepcopy(error)):
+        assert clone.tool == "query_loki_logs"
+        assert clone.raw == "boom"
+        assert clone.reason == MalformedToolResponse.NOT_JSON
+
+
+# --- the injected session is the real SDK's shape --------------------------------
+
+
+async def test_a_session_that_names_its_argument_the_sdk_way_still_works():
+    # `mcp.ClientSession.call_tool` spells the second parameter `arguments`, not `args`.
+    # Every call here is positional, which is what lets the real SDK satisfy MCPSession;
+    # a keyword call would break against it and no other test would notice.
+    class SdkShapedSession:
+        def __init__(self):
+            self.calls = []
+
+        async def list_tools(self):
+            return SimpleNamespace(tools=[SimpleNamespace(name="query_prometheus")])
+
+        async def call_tool(self, name, arguments=None):
+            self.calls.append((name, arguments))
+            return json_result({"data": {"result": []}})
+
+    session = SdkShapedSession()
+    mcp = GrafanaMCP(session=session, prometheus_uid="prom-uid")
+    assert await mcp.has_tool("query_prometheus") is True
+    assert await mcp.query_prometheus("up") == {"data": {"result": []}}
+    assert session.calls[0][0] == "query_prometheus"
+    assert session.calls[0][1]["expr"] == "up"
+
+
+async def test_concurrent_capability_checks_list_the_tools_once():
+    class SlowSession(FakeSession):
+        def __init__(self):
+            super().__init__()
+            self.list_calls = 0
+
+        async def list_tools(self):
+            self.list_calls += 1
+            await asyncio.sleep(0)
+            return await super().list_tools()
+
+    session = SlowSession()
+    mcp = GrafanaMCP(session=session)
+    found = await asyncio.gather(
+        mcp.has_tool("query_prometheus"), mcp.has_tool("create_incident")
+    )
+    assert found == [True, True]
+    assert session.list_calls == 1

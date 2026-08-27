@@ -27,11 +27,12 @@ work on exactly one Grafana.
 
 from __future__ import annotations
 
+import asyncio
 import base64
-import binascii
 import json
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, ClassVar, Protocol
+from urllib.parse import urlparse
 
 __all__ = [
     "GrafanaMCP",
@@ -54,15 +55,29 @@ class GrafanaMCPError(Exception):
     Always carries the tool that failed and the raw text the server sent, because "which
     call broke and what did Grafana actually say" is the whole of the first debugging step
     and neither survives a bare ``JSONDecodeError``.
+
+    Every constructor argument is passed straight up to ``Exception``, so ``args`` matches
+    the signature and the error can be serialised or copied. That is not theoretical: a
+    process pool, a task queue, or a ``deepcopy`` inside a retry decorator rebuilds an
+    exception from ``args``, and a mismatch there turns this typed error back into the
+    opaque failure it exists to replace.
     """
 
-    def __init__(self, tool: str, raw: str, detail: str) -> None:
+    #: What went wrong, in words, for the message. Each subclass fills it in.
+    detail = "failed"
+
+    def __init__(self, tool: str, raw: str, *rest: Any) -> None:
+        super().__init__(tool, raw, *rest)
         self.tool = tool
         self.raw = raw
-        snippet = raw[:_MESSAGE_SNIPPET]
-        if len(raw) > _MESSAGE_SNIPPET:
-            snippet += f"... [{len(raw)} chars total, full text on .raw]"
-        super().__init__(f"Grafana MCP tool {tool!r} {detail}: {snippet!r}")
+
+    def __str__(self) -> str:
+        # Rendered here rather than at construction, so ``args`` can stay the
+        # constructor's own arguments.
+        snippet = self.raw[:_MESSAGE_SNIPPET]
+        if len(self.raw) > _MESSAGE_SNIPPET:
+            snippet += f"... [{len(self.raw)} chars total, full text on .raw]"
+        return f"Grafana MCP tool {self.tool!r} {self.detail}: {snippet!r}"
 
 
 class ToolCallFailed(GrafanaMCPError):
@@ -74,8 +89,7 @@ class ToolCallFailed(GrafanaMCPError):
     is rarely the fix.
     """
 
-    def __init__(self, tool: str, raw: str) -> None:
-        super().__init__(tool, raw, "reported an error")
+    detail = "reported an error"
 
 
 class MalformedToolResponse(GrafanaMCPError):
@@ -85,7 +99,31 @@ class MalformedToolResponse(GrafanaMCPError):
     or a panel image with no image block. Usually something in the middle answered instead
     of Grafana - a proxy error page, an auth redirect - so the raw text is the evidence
     worth reading.
+
+    ``reason`` names which of those four it was, so a caller can branch on the condition
+    instead of substring-matching English: a response carrying no content at all is worth
+    one retry, a proxy error page is not. The prose is for humans only.
     """
+
+    NO_TEXT = "no_text"
+    NOT_JSON = "not_json"
+    NO_IMAGE = "no_image"
+    BAD_BASE64 = "bad_base64"
+
+    _DETAILS: ClassVar[dict[str, str]] = {
+        NO_TEXT: "returned no text content",
+        NOT_JSON: "returned content that is not JSON",
+        NO_IMAGE: "returned no image block",
+        BAD_BASE64: "returned an image block that is not valid base64",
+    }
+
+    def __init__(self, tool: str, raw: str, reason: str) -> None:
+        super().__init__(tool, raw, reason)
+        self.reason = reason
+
+    @property
+    def detail(self) -> str:
+        return self._DETAILS.get(self.reason, self.reason)
 
 
 @dataclass(frozen=True)
@@ -110,11 +148,17 @@ class MCPSession(Protocol):
     Structural, so ``mcp.ClientSession`` satisfies it without importing the SDK here and
     a test fake satisfies it without subclassing anything. That is what keeps these tests
     off a live Grafana.
+
+    The parameters of ``call_tool`` are positional-only, and the claim above is why. A
+    protocol method's parameter *names* are part of the contract, and the SDK spells the
+    second one ``arguments``; declaring it as ``args`` makes ``ClientSession`` fail the
+    structural check under a strict type checker even though every call here is
+    positional. So the calls stay positional and the protocol says so.
     """
 
     async def list_tools(self) -> Any: ...
 
-    async def call_tool(self, name: str, args: dict[str, Any]) -> Any: ...
+    async def call_tool(self, name: str, args: dict[str, Any], /) -> Any: ...
 
 
 def _args(**kwargs: Any) -> dict[str, Any]:
@@ -134,6 +178,38 @@ def _first_text(result: Any) -> str | None:
     return None
 
 
+def _describe_content(result: Any) -> str:
+    """What *did* come back, for the errors where no usable block did.
+
+    The base class promises the raw text the server sent; when there is none, the block
+    types are the next best evidence. An empty content list, a lone image block and an
+    embedded resource are three different problems and are otherwise indistinguishable
+    in the message.
+    """
+    content = getattr(result, "content", None) or []
+    return repr([getattr(block, "type", None) or type(block).__name__ for block in content])
+
+
+def _deeplink(result: Any) -> str | None:
+    """The panel deeplink, if the server sent one.
+
+    Only a text block holding an http(s) URL counts. The rendering tool puts the image
+    block first and the deeplink second today, so "first block with text" happens to be
+    right, but the rule that encodes is "any text is the deeplink": one appended warning
+    or truncation notice would become a broken link in every consumer, with no error
+    anywhere. A missing deeplink is already the documented normal case, so anything
+    unrecognised is treated as missing.
+    """
+    for block in getattr(result, "content", None) or []:
+        if getattr(block, "type", None) != "text":
+            continue
+        text = (getattr(block, "text", None) or "").strip()
+        parsed = urlparse(text)
+        if parsed.scheme in ("http", "https") and parsed.netloc:
+            return text
+    return None
+
+
 def _check_ok(tool: str, result: Any) -> None:
     if getattr(result, "isError", False):
         raise ToolCallFailed(tool, _first_text(result) or "")
@@ -146,8 +222,9 @@ class GrafanaMCP:
     concern (stdio vs streamable HTTP, auth, reconnects), and injecting it is what lets
     every test above run without a Grafana.
 
-    Not thread-safe or task-safe beyond what the underlying session is; the only state
-    held is the cached tool list.
+    The only state held is the cached tool list, and its fill is serialised with an
+    ``asyncio.Lock`` because one instance is shared by concurrent agent tasks. Nothing
+    here is thread-safe beyond what the underlying session is.
     """
 
     def __init__(
@@ -161,6 +238,7 @@ class GrafanaMCP:
         self.prometheus_uid = prometheus_uid
         self.loki_uid = loki_uid
         self._tool_names: list[str] | None = None
+        self._tool_names_lock = asyncio.Lock()
 
     # -- capability discovery ----------------------------------------------------
 
@@ -173,11 +251,18 @@ class GrafanaMCP:
 
         A copy, so a caller sorting or filtering the result in place cannot quietly
         corrupt the cache every later ``has_tool`` reads.
+
+        The fill is serialised and re-checked under the lock: two agent tasks reaching
+        their first ``has_tool`` together would otherwise both see an empty cache and
+        both pay for a ``list_tools`` round trip.
         """
-        if self._tool_names is None or refresh:
-            listing = await self.session.list_tools()
-            self._tool_names = [tool.name for tool in listing.tools]
-        return list(self._tool_names)
+        if self._tool_names is not None and not refresh:
+            return list(self._tool_names)
+        async with self._tool_names_lock:
+            if self._tool_names is None or refresh:
+                listing = await self.session.list_tools()
+                self._tool_names = [tool.name for tool in listing.tools]
+            return list(self._tool_names)
 
     async def has_tool(self, name: str) -> bool:
         """Whether one tool is present, for callers that can degrade without it."""
@@ -401,21 +486,24 @@ class GrafanaMCP:
             if data is None:
                 continue
             try:
+                # binascii.Error is a ValueError subclass, so this catches both.
                 png = base64.b64decode(data, validate=True)
-            except (binascii.Error, ValueError) as exc:
+            except ValueError as exc:
                 raise MalformedToolResponse(
-                    tool, str(data), "returned an image block that is not valid base64"
+                    tool, str(data), MalformedToolResponse.BAD_BASE64
                 ) from exc
             return PanelImage(
                 png=png,
                 mime_type=getattr(block, "mimeType", None) or "image/png",
                 # The deeplink is best-effort on the server side and omitted when an
                 # explicit org was requested, so its absence is normal, not an error.
-                deeplink=_first_text(result),
+                deeplink=_deeplink(result),
             )
 
         raise MalformedToolResponse(
-            tool, _first_text(result) or "", "returned no image block"
+            tool,
+            _first_text(result) or _describe_content(result),
+            MalformedToolResponse.NO_IMAGE,
         )
 
     # -- internals ---------------------------------------------------------------
@@ -449,8 +537,10 @@ class GrafanaMCP:
 
         text = _first_text(result)
         if text is None:
-            raise MalformedToolResponse(tool, "", "returned no text content")
+            raise MalformedToolResponse(
+                tool, _describe_content(result), MalformedToolResponse.NO_TEXT
+            )
         try:
             return json.loads(text)
         except json.JSONDecodeError as exc:
-            raise MalformedToolResponse(tool, text, "returned content that is not JSON") from exc
+            raise MalformedToolResponse(tool, text, MalformedToolResponse.NOT_JSON) from exc
