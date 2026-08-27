@@ -286,9 +286,7 @@ async def test_a_result_with_no_text_block_raises_a_clear_error():
 async def test_a_result_with_no_text_block_says_what_did_come_back():
     # An empty content list, an image block and an embedded resource are three different
     # problems; without naming the blocks the message cannot tell them apart.
-    session = FakeSession(
-        {"query_prometheus": _Result([_Block(data="ignored", type="image")])}
-    )
+    session = FakeSession({"query_prometheus": _Result([_Block(data="ignored", type="image")])})
     mcp = GrafanaMCP(session=session, prometheus_uid="prom-uid")
     with pytest.raises(MalformedToolResponse) as caught:
         await mcp.query_prometheus("up")
@@ -353,11 +351,7 @@ async def test_get_panel_image_without_an_image_block_raises_a_clear_error():
 
 async def test_get_panel_image_surfaces_a_tool_error():
     session = FakeSession(
-        {
-            "get_panel_image": _Result(
-                [_Block(text="image renderer not available")], is_error=True
-            )
-        }
+        {"get_panel_image": _Result([_Block(text="image renderer not available")], is_error=True)}
     )
     mcp = GrafanaMCP(session=session)
     with pytest.raises(ToolCallFailed):
@@ -365,9 +359,7 @@ async def test_get_panel_image_surfaces_a_tool_error():
 
 
 async def test_get_panel_image_with_undecodable_data_raises_a_clear_error():
-    session = FakeSession(
-        {"get_panel_image": _Result([_Block(data="not!base64", type="image")])}
-    )
+    session = FakeSession({"get_panel_image": _Result([_Block(data="not!base64", type="image")])})
     mcp = GrafanaMCP(session=session)
     with pytest.raises(MalformedToolResponse) as caught:
         await mcp.get_panel_image(dashboard_uid="dash-uid")
@@ -498,8 +490,6 @@ async def test_concurrent_capability_checks_list_the_tools_once():
 
     session = SlowSession()
     mcp = GrafanaMCP(session=session)
-    found = await asyncio.gather(
-        mcp.has_tool("query_prometheus"), mcp.has_tool("create_incident")
-    )
+    found = await asyncio.gather(mcp.has_tool("query_prometheus"), mcp.has_tool("create_incident"))
     assert found == [True, True]
     assert session.list_calls == 1

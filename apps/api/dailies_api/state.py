@@ -206,3 +206,16 @@ class ShotStore:
         """How many shots are being watched. The 404 path reports this."""
         with self._lock:
             return len(self._shots)
+
+    def __bool__(self) -> bool:
+        """Always ``True``: a store exists whether or not it holds shots yet.
+
+        Without this, ``__len__`` alone would make an empty store falsy, and the
+        ordinary ``store or ShotStore()`` idiom would silently discard a caller's
+        real-but-empty store and substitute a different one. That is a live risk
+        here because a store is legitimately empty at startup, before the first
+        render is registered. ``ShotStore`` is a service object, not a value
+        container, so its truthiness is its existence rather than its contents.
+        Callers who want emptiness should ask ``len(store) == 0``.
+        """
+        return True

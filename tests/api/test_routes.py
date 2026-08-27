@@ -132,9 +132,10 @@ def test_risk_members_are_ordered_least_to_most_severe():
 
 
 def test_risk_serialises_as_its_own_name():
-    assert Shot(id="SH010", frames_total=1, risk=Risk.MISSED).model_dump(mode="json")[
-        "risk"
-    ] == "MISSED"
+    assert (
+        Shot(id="SH010", frames_total=1, risk=Risk.MISSED).model_dump(mode="json")["risk"]
+        == "MISSED"
+    )
 
 
 def test_store_len_counts_distinct_shots():
@@ -289,3 +290,18 @@ def test_cors_origins_reads_the_environment():
     assert cors_origins(env) == ["https://board.example", "https://second.example"]
     assert cors_origins({CORS_ORIGINS_ENV: ""}) == []
     assert cors_origins({}) == [BOARD, "http://127.0.0.1:3000"]
+
+
+def test_empty_store_is_truthy_so_the_or_idiom_cannot_discard_it():
+    """An empty ShotStore must not be falsy.
+
+    A store is legitimately empty at startup. If ``__len__`` alone made it falsy,
+    ``store or ShotStore()`` would quietly swap a caller's real store for a new
+    one and the board would poll an object nothing writes to.
+    """
+    from dailies_api.state import ShotStore
+
+    store = ShotStore()
+    assert len(store) == 0
+    assert bool(store) is True
+    assert (store or ShotStore()) is store

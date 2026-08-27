@@ -200,9 +200,7 @@ class RenderEvent(BaseModel):
     @model_validator(mode="after")
     def _check_payload_matches_kind(self) -> "RenderEvent":
         missing = [
-            field
-            for field in _REQUIRED_BY_KIND.get(self.kind, ())
-            if getattr(self, field) is None
+            field for field in _REQUIRED_BY_KIND.get(self.kind, ()) if getattr(self, field) is None
         ]
         if missing:
             raise ValueError(f"{self.kind.value} requires {', '.join(missing)}")

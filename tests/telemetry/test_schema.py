@@ -52,7 +52,9 @@ def test_metric_names_are_prometheus_safe():
         assert METRIC_NAME_RE.fullmatch(name), f"{name} is not a legal metric name"
 
 
-@pytest.mark.parametrize("bad", ["render_frame-duration", "render_frame..d", "render/frame", "render frame"])
+@pytest.mark.parametrize(
+    "bad", ["render_frame-duration", "render_frame..d", "render/frame", "render frame"]
+)
 def test_metric_name_grammar_rejects_illegal_names(bad):
     """The old test passed all of these; the grammar check must not."""
     assert not METRIC_NAME_RE.fullmatch(bad)

@@ -128,9 +128,7 @@ DIAGNOSIS_SCHEMA: dict[str, Any] = {
                     "finding": {"type": "string"},
                 },
             },
-            "description": (
-                "The queries run and what each showed. Never assert without one."
-            ),
+            "description": ("The queries run and what each showed. Never assert without one."),
         },
         "affected_frames": {"type": "string"},
         "recommended_action": {"type": "string"},
@@ -293,10 +291,7 @@ def build_investigator(
             it reads no telemetry and answers anyway.
     """
     client: GrafanaMCP | _Unconfigured = _UNCONFIGURED if grafana is None else grafana
-    tools = [
-        _grafana_tool(item, client) if isinstance(item, str) else item
-        for item in mcp_tools
-    ]
+    tools = [_grafana_tool(item, client) if isinstance(item, str) else item for item in mcp_tools]
     if not tools:
         raise ValueError(
             "build_investigator() needs at least one tool; an investigator with none "
