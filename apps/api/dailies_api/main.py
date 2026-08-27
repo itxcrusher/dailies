@@ -6,6 +6,10 @@ server side. Exposing a write route here would give the board a second way to se
 that bypasses the agent that is supposed to decide it, and the first time the two
 disagreed there would be no way to tell which one was right.
 
+The board is served from its own origin (``apps/web`` is a separate Next.js app), so this
+module also owns the CORS allow-list. It is read from the environment rather than written
+here: see :func:`cors_origins`.
+
 ``create_app`` takes the store rather than reaching for a module-level one so the app has
 no global state to leak between tests, and so a process can run two boards over two stores
 without them seeing each other's shots. That is why there is no module-level ``app`` to
@@ -17,12 +21,53 @@ through ``app.state.shots``::
 
 from __future__ import annotations
 
+import os
+from collections.abc import Mapping, Sequence
+
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from dailies_api.state import Shot, ShotStore
 
-__all__ = ["Health", "ShotList", "create_app"]
+__all__ = [
+    "CORS_ORIGINS_ENV",
+    "DEFAULT_CORS_ORIGINS",
+    "Health",
+    "ShotList",
+    "cors_origins",
+    "create_app",
+]
+
+#: Where the browser origins allowed to read the board come from. Comma-separated, and
+#: read from the environment rather than baked in because the board's origin differs per
+#: deployment and a hardcoded production hostname is the kind of thing that gets copied
+#: into a fork and quietly grants it access.
+CORS_ORIGINS_ENV = "DAILIES_CORS_ORIGINS"
+
+#: What a standalone run allows when the variable is unset: a Next.js dev server on this
+#: machine, which is the only origin `apps/web` has before it is deployed anywhere. Both
+#: spellings, because a browser sends the one that was typed and the two are different
+#: origins to CORS even though they are the same server.
+DEFAULT_CORS_ORIGINS: tuple[str, ...] = ("http://localhost:3000", "http://127.0.0.1:3000")
+
+
+def cors_origins(env: Mapping[str, str] | None = None) -> list[str]:
+    """The browser origins allowed to read the board.
+
+    Args:
+        env: Where to read ``DAILIES_CORS_ORIGINS`` from. Defaults to the process
+            environment; a caller passes one to test the parsing without mutating it.
+
+    An unset variable means "a local board", which is what a standalone run wants. An
+    empty one means "no cross-origin reader", which is what a deployment that serves the
+    board from the same origin wants, and is deliberately reachable: the alternative
+    would be no way to switch CORS off short of an unset variable that means the opposite.
+    """
+    raw = (os.environ if env is None else env).get(CORS_ORIGINS_ENV)
+    if raw is None:
+        return list(DEFAULT_CORS_ORIGINS)
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
 
 class ShotList(BaseModel):
@@ -43,13 +88,19 @@ class Health(BaseModel):
     ok: bool = True
 
 
-def create_app(store: ShotStore | None = None) -> FastAPI:
+def create_app(
+    store: ShotStore | None = None,
+    *,
+    allow_origins: Sequence[str] | None = None,
+) -> FastAPI:
     """Build the board API over ``store``.
 
     Args:
         store: The shot state to serve. Omit it for a fresh empty store, which is what a
             standalone run wants; pass one to share state with the render and agent side
             of the process.
+        allow_origins: Browser origins allowed to read the board. Omit it to read
+            :data:`CORS_ORIGINS_ENV` from the environment.
     """
     # `is None`, not `or`: ShotStore defines __len__, so an empty store passed in by a
     # caller is falsy and `store or ShotStore()` would quietly swap it for a different
@@ -63,6 +114,27 @@ def create_app(store: ShotStore | None = None) -> FastAPI:
         summary="Delivery risk and diagnoses for shots on a render deadline",
     )
     app.state.shots = shots
+
+    # The board at apps/web/ is a Next.js app on its own origin, so every read it makes is
+    # cross-origin and a browser drops the response without one of these headers. Worth the
+    # middleware because a CORS failure is the least diagnosable error class there is: the
+    # request reaches the server, the server answers 200, and the only trace is a console
+    # message in a browser nobody has open. An allow-list, never a wildcard, so the board's
+    # origin is a deployment decision rather than an open door.
+    origins = cors_origins() if allow_origins is None else list(allow_origins)
+    if origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=origins,
+            # Read-only surface: GET is every route there is, and OPTIONS is what the
+            # middleware answers a preflight with. Naming them beats "*" so adding a write
+            # route later is a deliberate edit here rather than something already allowed.
+            allow_methods=["GET", "OPTIONS"],
+            allow_headers=["*"],
+            # No cookies and no Authorization on this API, so credentialed requests would
+            # only widen what an allowed origin can do without buying the board anything.
+            allow_credentials=False,
+        )
 
     @app.get("/healthz", response_model=Health, tags=["ops"])
     def healthz() -> Health:

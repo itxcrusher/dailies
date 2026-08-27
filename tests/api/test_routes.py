@@ -13,13 +13,15 @@ contract the board and the Guardian both code against, not FastAPI itself:
 - the **shot id**. It is the composite render identity and it has to survive a URL path
   segment, so an id the detail route could never address is rejected where it is built
   rather than 404ing later, and two jobs on one shot stay two rows.
+- the **CORS allow-list**. The board is cross-origin, and a missing header there is a
+  failure that only exists inside somebody's browser console.
 
 No network and no model: the store is in-memory and the routes are driven through
 ``TestClient``.
 """
 
 import pytest
-from dailies_api.main import create_app
+from dailies_api.main import CORS_ORIGINS_ENV, cors_origins, create_app
 from dailies_api.state import Risk, Shot, ShotStore
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
@@ -240,3 +242,50 @@ def test_two_jobs_rendering_the_same_shot_are_two_rows():
     assert [shot.id for shot in store.all()] == [first, retry]
     assert store.get(first).frames_done == 96
     assert store.get(retry).risk is Risk.ON_TRACK
+
+
+# --- CORS: the board is a different origin -------------------------------------------
+
+
+BOARD = "http://localhost:3000"
+
+
+def test_the_board_origin_may_read_the_shot_list():
+    r = _client().get("/api/shots", headers={"Origin": BOARD})
+    assert r.status_code == 200
+    assert r.headers["access-control-allow-origin"] == BOARD
+
+
+def test_a_preflight_from_the_board_is_answered():
+    r = _client().options(
+        "/api/shots",
+        headers={
+            "Origin": BOARD,
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+    assert r.status_code == 200
+    assert r.headers["access-control-allow-origin"] == BOARD
+    assert "GET" in r.headers["access-control-allow-methods"]
+
+
+def test_an_origin_that_is_not_allow_listed_gets_no_cors_header():
+    r = TestClient(create_app(allow_origins=[BOARD])).get(
+        "/api/shots", headers={"Origin": "https://evil.example"}
+    )
+    # Starlette still answers; it is the missing header that makes the browser drop it.
+    assert r.status_code == 200
+    assert "access-control-allow-origin" not in r.headers
+
+
+def test_cors_is_off_when_the_allow_list_is_empty():
+    r = TestClient(create_app(allow_origins=[])).get("/api/shots", headers={"Origin": BOARD})
+    assert "access-control-allow-origin" not in r.headers
+
+
+def test_cors_origins_reads_the_environment():
+    env = {CORS_ORIGINS_ENV: "https://board.example, https://second.example"}
+    assert cors_origins(env) == ["https://board.example", "https://second.example"]
+    assert cors_origins({CORS_ORIGINS_ENV: ""}) == []
+    assert cors_origins({}) == [BOARD, "http://127.0.0.1:3000"]
