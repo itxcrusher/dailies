@@ -20,7 +20,12 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.3", "pytest-asyncio>=0.24", "ruff>=0.7"]
-agent = ["google-adk>=1.0", "mcp>=1.2"]
+# >=1.20, not 1.0: the investigator was built and verified against google-adk 1.20.0's
+# actual surface (`LlmAgent.tools` accepting `BaseTool`, `FunctionTool` deriving its
+# declaration from a bound method's signature, `{name}` state injection into a string
+# instruction). AGENTS.md requires ADK signatures to be verified rather than assumed, and
+# nothing older than 1.20 has been.
+agent = ["google-adk>=1.20", "mcp>=1.2"]
 
 [tool.setuptools.packages.find]
 where = ["packages/telemetry", "packages/render", "apps/api"]
