@@ -1,0 +1,25 @@
+# Copy to terraform.tfvars and fill in the image tags. terraform.tfvars is gitignored.
+#
+# The three images are built by `gcloud builds submit` (Task 10) and passed in here.
+# Terraform never builds or owns them. Replace the :v1 placeholders with the tags that
+# `gcloud artifacts docker images list` actually reports; a tag that does not exist makes
+# Cloud Run reject the revision.
+
+project_id  = "dailies-render-2026"
+region      = "us-central1"
+grafana_url = "https://politebamboo549.grafana.net"
+
+api_image    = "us-central1-docker.pkg.dev/dailies-render-2026/dailies/api:v1"
+web_image    = "us-central1-docker.pkg.dev/dailies-render-2026/dailies/web:v1"
+render_image = "us-central1-docker.pkg.dev/dailies-render-2026/dailies/render:v1"
+
+# Optional. The defaults match the politebamboo549 stack and are usually left alone.
+# otlp_endpoint             = "https://otlp-gateway-prod-us-east-3.grafana.net/otlp"
+# prometheus_datasource_uid = "grafanacloud-prom"
+# loki_datasource_uid       = "grafanacloud-logs"
+
+# Set once the board URL is known, if the board calls the API from the browser.
+# cors_origins = "https://dailies-web-xxxxxxxx-uc.a.run.app"
+
+# Lower render_job_memory to induce the real OOM in Task 12.
+# render_job_memory = "8Gi"
