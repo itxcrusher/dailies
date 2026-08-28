@@ -275,3 +275,49 @@ def test_output_frames_are_resolvable_uris_not_farm_local_paths():
     """
     (frame,) = FakeBackend().get_output_frames("job-1")
     assert "://" in frame
+
+
+# Real Blender 4.5.9 output, captured from a render inside the render image on
+# 2026-08-28. Blender prints the save across TWO lines. The single-line form that
+# tests/telemetry/test_parser.py uses was invented when the plan was written and does
+# not occur in practice, which is why 62 green parser tests still let
+# render_frame_duration_seconds go silently missing from Grafana.
+REAL_BLENDER_SAVE = [
+    "Fra:1 Mem:16.55M (Peak 16.55M) | Time:00:00.27 | Remaining:00:00.01 | Mem:2.30M, Peak:2.30M | Scene, ViewLayer | Sample 8/8",
+    "Fra:1 Mem:16.55M (Peak 16.55M) | Time:00:00.28 | Compositing | Tile 1/1",
+    "Saved: '/tmp/dailies/frame_0001.png'",
+    " Time: 00:00.76 (Saving: 00:00.48)",
+]
+
+
+def test_two_line_save_yields_frame_complete_with_duration():
+    """Real Blender splits the save across two lines; both must close the frame.
+
+    Regression for the defect that produced zero FRAME_COMPLETE events across 97 lines
+    of genuine render output, leaving render_frame_duration_seconds absent from Grafana
+    while FRAME_START kept flowing and the pipeline looked healthy.
+    """
+    events = list(render_from_stream(iter(REAL_BLENDER_SAVE), shot="SH010"))
+    completes = [e for e in events if e.kind == EventKind.FRAME_COMPLETE]
+    assert len(completes) == 1
+    assert completes[0].frame == 1
+    assert completes[0].duration_seconds == 0.76
+
+
+def test_single_line_save_still_works():
+    """The one-line form must keep working; some Blender builds emit it."""
+    events = list(
+        render_from_stream(
+            iter(["Saved: '/out/SH010_0012.png'  Time: 00:04.55 (Saving: 00:00.03)"]),
+            shot="SH010",
+        )
+    )
+    completes = [e for e in events if e.kind == EventKind.FRAME_COMPLETE]
+    assert len(completes) == 1
+    assert completes[0].duration_seconds == 4.55
+
+
+def test_saved_line_not_followed_by_time_does_not_hang_or_emit():
+    """A dangling Saved: at end of stream must not emit a duration-less completion."""
+    events = list(render_from_stream(iter(["Saved: '/tmp/x/frame_0003.png'"]), shot="SH010"))
+    assert [e for e in events if e.kind == EventKind.FRAME_COMPLETE] == []
