@@ -1,0 +1,33 @@
+# What `gcloud builds submit` must not upload.
+#
+# Written explicitly rather than left to gcloud's fallback, which is to synthesise one
+# from .gitignore. That fallback is a trap here: .gitignore lists .env, so the file would
+# be excluded today, and the moment someone adds a tracked file that .gitignore does not
+# mention the two lists drift apart silently. The credential exclusion is too important
+# to be a side effect of another file's contents.
+.env
+.env.*
+!.env.example
+
+.git
+.gcloudignore
+
+# Terraform state holds secret values in plaintext.
+infra/terraform/.terraform/
+infra/terraform/*.tfstate
+infra/terraform/*.tfstate.*
+infra/terraform/terraform.tfvars
+
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+node_modules/
+.next/
+renders/
+private/

@@ -1,0 +1,136 @@
+:root {
+  color-scheme: dark;
+  --bg: #0b0d10;
+  --panel: #14181d;
+  --line: #232a32;
+  --text: #e7edf3;
+  --muted: #8b97a5;
+  --on-track: #4ade80;
+  --watch: #fbbf24;
+  --at-risk: #fb923c;
+  --critical: #f87171;
+  --missed: #a78bfa;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial,
+    sans-serif;
+}
+
+main {
+  max-width: 68rem;
+  margin: 0 auto;
+  padding: 3rem 1.5rem 4rem;
+}
+
+header h1 {
+  margin: 0;
+  font-size: 1.6rem;
+  letter-spacing: -0.02em;
+}
+
+header p {
+  margin: 0.4rem 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.panel {
+  margin-top: 2rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  min-width: 40rem;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+
+th,
+td {
+  padding: 0.7rem 1rem;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+}
+
+th {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* Every figure in the table is a column of numbers a supervisor scans vertically.
+   Proportional digits make the columns ragged and the comparison slower, so the numeric
+   cells opt into tabular figures and right alignment. */
+.num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.id {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.86rem;
+}
+
+.risk {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  border: 1px solid currentColor;
+}
+
+.risk-ON_TRACK {
+  color: var(--on-track);
+}
+.risk-WATCH {
+  color: var(--watch);
+}
+.risk-AT_RISK {
+  color: var(--at-risk);
+}
+.risk-CRITICAL {
+  color: var(--critical);
+}
+.risk-MISSED {
+  color: var(--missed);
+}
+
+.empty,
+.error {
+  padding: 1.5rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.error {
+  color: var(--critical);
+}
+
+.error code {
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}

@@ -1,0 +1,58 @@
+# One Cloud Build config, parameterised, for the two images whose build context is the
+# repo root.
+#
+# Why a config file at all: `gcloud builds submit --tag` has no way to name a Dockerfile.
+# It requires a file literally called `Dockerfile` at the root of the uploaded source, and
+# this repo has two root-context images (api and render) that must live under infra/. The
+# `-f` flag the plan sketches does not exist on `gcloud builds submit`; it is a `docker
+# build` flag. This config is the smallest thing that closes that gap.
+#
+# Usage:
+#   gcloud builds submit . --config infra/cloudbuild.yaml \
+#     --substitutions=_DOCKERFILE=infra/Dockerfile.api,_IMAGE=<region>-docker.pkg.dev/<proj>/dailies/api:v1
+#
+# The web image does NOT use this: apps/web has a plain `Dockerfile` at its own root, so
+# `gcloud builds submit apps/web --tag ...` works unaided.
+#
+# STATUS, 2026-08-28: this config is accepted by `gcloud builds submit` but has not built
+# an image end to end. The submission fails before the first step, at source resolution:
+#
+#   INVALID_ARGUMENT: could not resolve source: Error 403:
+#   362568387922-compute@developer.gserviceaccount.com does not have
+#   storage.objects.get access to .../dailies-render-2026_cloudbuild/objects/source/...
+#
+# dailies-render-2026 is a post-2024 project, so builds run as the DEFAULT COMPUTE service
+# account rather than the legacy Cloud Build one, and that account starts with none of the
+# roles the build needs. Three project-level bindings on
+# 362568387922-compute@developer.gserviceaccount.com fix it:
+#   roles/storage.objectViewer     read the uploaded source tarball
+#   roles/logging.logWriter        write the build log (with logging: CLOUD_LOGGING_ONLY)
+#   roles/artifactregistry.writer  push the result
+# The three images in the registry today were built locally with `docker build` and pushed
+# with `docker push` instead, which needs no additional identity.
+
+substitutions:
+  _DOCKERFILE: infra/Dockerfile.api
+  _IMAGE: ""
+
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ["build", "-f", "${_DOCKERFILE}", "-t", "${_IMAGE}", "."]
+
+# Cloud Build pushes what is listed here after the steps succeed, and reports the digest
+# it pushed. That digest is the evidence the image reached Artifact Registry; the build
+# log on its own is not.
+images:
+  - "${_IMAGE}"
+
+options:
+  # The render image downloads and unpacks a 380 MB Blender tarball and then installs a
+  # Python tree on top of it. The default machine type builds it, slowly; this one keeps
+  # the two images inside a sensible wall-clock.
+  machineType: E2_HIGHCPU_8
+  # Required when the build runs as a service account with no dedicated log bucket:
+  # without it the build is rejected up front for having nowhere to write its logs.
+  logging: CLOUD_LOGGING_ONLY
+
+# The default is 10 minutes, which the render image exceeds on a cold cache.
+timeout: 2400s

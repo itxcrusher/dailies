@@ -1,0 +1,120 @@
+# The render worker: a real Blender 4.x, the telemetry packages, and the entrypoint that
+# joins them.
+#
+# Build context is the REPO ROOT (same reason as Dockerfile.api):
+#
+#   docker build -f infra/Dockerfile.render -t <tag> .
+#
+# The image is deliberately large. Blender is 1.2 GB unpacked and there is no honest way
+# around that: an image that "has Blender" via a pip wheel does not have the renderer,
+# and the whole project is downstream of a real render printing real progress lines.
+
+# ---------------------------------------------------------------------------
+# Stage 1: fetch and verify Blender.
+#
+# Separate so curl, xz-utils and the 380 MB tarball never reach the final image.
+# ---------------------------------------------------------------------------
+FROM python:3.11-slim AS blender
+
+# Pinned, both the version and its hash. An unpinned "latest LTS" would change the
+# renderer under a project whose parser is written against Blender's output format, and
+# the checksum is what makes the download a fetch of a known artifact rather than of
+# whatever is at that URL today. Hash from download.blender.org/release/Blender4.5/blender-4.5.9.sha256
+ARG BLENDER_SERIES=4.5
+ARG BLENDER_VERSION=4.5.9
+ARG BLENDER_SHA256=dcdc3eca6c9825bb35a8033b689c053f3cb5a9b0cd2a61b2eac2a49436b4ad3d
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl xz-utils \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL -o /tmp/blender.tar.xz \
+      "https://download.blender.org/release/Blender${BLENDER_SERIES}/blender-${BLENDER_VERSION}-linux-x64.tar.xz" \
+ && echo "${BLENDER_SHA256}  /tmp/blender.tar.xz" | sha256sum -c - \
+ && mkdir -p /opt/blender \
+ && tar -xJf /tmp/blender.tar.xz -C /opt/blender --strip-components=1 \
+ && rm /tmp/blender.tar.xz
+
+# ---------------------------------------------------------------------------
+# Stage 2: the runtime.
+# ---------------------------------------------------------------------------
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Blender's shared-library floor. It links against X11 and GL even in --background: the
+# libraries have to be present for the binary to load, though no display is ever opened.
+# This list is not guesswork - it is what `blender --version` fails on, one library at a
+# time, and the RUN below is what proves the list is complete.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      libx11-6 \
+      libxext6 \
+      libxrender1 \
+      libxi6 \
+      libxxf86vm1 \
+      libxfixes3 \
+      libxkbcommon0 \
+      libsm6 \
+      libice6 \
+      libgl1 \
+      libegl1 \
+      libglib2.0-0 \
+      libgomp1 \
+      libfreetype6 \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY --from=blender /opt/blender /opt/blender
+RUN ln -s /opt/blender/blender /usr/local/bin/blender
+
+# THE check that matters. An image that builds without a working Blender is this task's
+# most likely failure and it would not surface until a Cloud Run execution failed with a
+# missing .so, hours later and one layer of logs away. Running it here means a green build
+# is evidence the renderer starts.
+RUN blender --version
+
+WORKDIR /app
+
+COPY pyproject.toml ./
+COPY packages ./packages
+# apps/api is here for setuptools, not for the worker. One pyproject declares all three
+# package roots, and an install with one of them missing is a different distribution from
+# the one the tests run against. Copying it costs a few hundred KB and removes a class of
+# "works locally, half-installed in the image" bug.
+COPY apps/api ./apps/api
+
+# Base install, no extras: the worker parses stdout and pushes OTLP. It has no business
+# holding the agent's dependencies, and google-adk would add hundreds of MB to an image
+# that is already heavy.
+RUN pip install --no-cache-dir .
+
+# Scenes AFTER the install, and not by accident. They are data, not part of the
+# distribution, and they are the most-edited thing in this image: tuning the demo scene is
+# how a heavy frame gets heavy enough to OOM. Copied before the install, every such tweak
+# re-ran a twelve-minute pip resolve for a file pip never looks at.
+COPY scenes ./scenes
+
+RUN python -c "import dailies_render.worker, dailies_telemetry.emitter; print('imports ok')"
+
+COPY infra/render-entrypoint.sh /usr/local/bin/dailies-render
+RUN chmod +x /usr/local/bin/dailies-render
+
+RUN useradd --create-home --uid 1001 dailies \
+ && mkdir -p /tmp/dailies \
+ && chown dailies:dailies /tmp/dailies
+USER dailies
+
+# What to render when the execution overrides nothing. The scene script is the fallback
+# that makes the container self-sufficient: no mounted asset, still a real Cycles render.
+ENV DAILIES_SCENE_SCRIPT=/app/scenes/demo_scene.py \
+    DAILIES_OUTPUT=/tmp/dailies/frame_#### \
+    DAILIES_SHOT=SH010 \
+    DAILIES_FRAME_START=1 \
+    DAILIES_FRAME_END=4
+
+# CMD, not ENTRYPOINT, on purpose: `docker run <image> blender --version` has to be able
+# to replace the command, and that is the verification this image is checked with.
+CMD ["dailies-render"]

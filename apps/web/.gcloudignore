@@ -1,0 +1,8 @@
+# gcloud reads the .gcloudignore of the directory it is uploading, so the repo-root one
+# does not apply to `gcloud builds submit apps/web`.
+node_modules/
+.next/
+out/
+.env
+.env.*
+!.env.example

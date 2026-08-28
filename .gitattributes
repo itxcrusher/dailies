@@ -1,0 +1,6 @@
+# The container entrypoint is executed by /bin/sh inside a linux image. A CRLF checkout
+# on a Windows machine breaks it in the least helpful way there is: the shebang line ends
+# in \r, so the kernel looks for an interpreter called "/bin/sh\r" and the container exits
+# with "no such file or directory" naming a file that is plainly there.
+*.sh text eol=lf
+Dockerfile* text eol=lf

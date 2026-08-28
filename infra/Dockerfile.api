@@ -1,0 +1,50 @@
+# The board API, plus the ADK investigator it hosts.
+#
+# Build context is the REPO ROOT, not infra/: the distribution declares three package
+# roots (packages/telemetry, packages/render, apps/api) in one pyproject, so pip needs
+# all of them present at the same relative paths.
+#
+#   docker build -f infra/Dockerfile.api -t <tag> .
+#
+# Nothing here reads a secret. The Grafana token and the OTLP credential reach the
+# container from Secret Manager at runtime, by reference (see infra/terraform/cloud_run.tf).
+
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /app
+
+# Sources before the install, and the install as its own layer: a code change then
+# rebuilds one layer instead of re-resolving the whole dependency tree.
+COPY pyproject.toml ./
+COPY packages ./packages
+COPY apps/api ./apps/api
+
+# The "agent" extra, not the base install: the investigator imports google-adk at module
+# import time and raises a pointed ImportError without it. An API image that answers
+# /api/shots but cannot investigate anything would look healthy and fail at the one
+# moment the project exists for.
+RUN pip install --no-cache-dir ".[agent]"
+
+# Fail the BUILD, not the first request, if the package layout did not survive the
+# install. `pip install .` resolves packages differently from the editable install the
+# tests run under, and a missing module surfaces here as a red build rather than as a
+# Cloud Run revision that never becomes ready.
+RUN python -c "import dailies_api.main, dailies_api.agent, dailies_render.worker, dailies_telemetry.emitter; print('imports ok')"
+
+# Not root. Nothing here needs to write to the filesystem at runtime.
+RUN useradd --create-home --uid 1001 dailies
+USER dailies
+
+# Cloud Run injects PORT and the container must honour it; 8080 is only the default for
+# a plain `docker run`. The container_port in Terraform matches this default.
+ENV PORT=8080
+EXPOSE 8080
+
+# `sh -c` so ${PORT} is expanded at start time (the exec form does no substitution), and
+# `exec` so uvicorn becomes PID 1 and receives Cloud Run's SIGTERM directly.
+CMD ["sh", "-c", "exec uvicorn dailies_api.main:create_app --factory --host 0.0.0.0 --port ${PORT:-8080}"]

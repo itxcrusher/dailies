@@ -1,0 +1,11 @@
+# node_modules is installed inside the image from the lockfile; uploading a Windows or
+# macOS tree would ship the wrong native binaries into a linux container.
+node_modules
+.next
+out
+npm-debug.log*
+.env
+.env.*
+!.env.example
+Dockerfile
+.dockerignore

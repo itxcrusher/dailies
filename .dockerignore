@@ -1,0 +1,37 @@
+# Applies to builds whose context is the repo root (the api and render images).
+# apps/web builds from its own directory and has its own .dockerignore.
+#
+# The first entry is the one that matters: .env holds the real Grafana credentials and
+# must never enter a build context, where it would be readable in the image and in the
+# build log's uploaded source.
+.env
+.env.*
+!.env.example
+
+.git
+.gitignore
+.github
+
+# Terraform state holds secret values in plaintext.
+infra/terraform/.terraform
+infra/terraform/*.tfstate
+infra/terraform/*.tfstate.*
+infra/terraform/terraform.tfvars
+
+.venv
+venv
+__pycache__
+*.py[cod]
+*.egg-info
+.pytest_cache
+.ruff_cache
+.mypy_cache
+
+apps/web
+node_modules
+.next
+
+renders
+private
+*.md
+!README.md
