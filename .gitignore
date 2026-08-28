@@ -14,3 +14,9 @@ out/
 renders/
 *.blend1
 .DS_Store
+
+# Terraform. State holds secret values in plaintext; tfvars holds real config.
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfvars
