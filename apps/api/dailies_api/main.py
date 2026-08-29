@@ -29,7 +29,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from typing import Any
+from typing import Any, Protocol
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -120,6 +120,55 @@ def mcp_settings(env: Mapping[str, str] | None = None) -> dict[str, str | None]:
     }
 
 
+class ShotSource(Protocol):
+    """Where the board's rows come from.
+
+    A protocol rather than the concrete class so a test can serve a fixed list, and so
+    the API keeps no compile-time dependency on Grafana: the board is a view over
+    whatever can answer "which shots exist and how far along are they".
+    """
+
+    async def list_shots(self) -> list[Shot]: ...
+
+
+def build_shot_source(env: Mapping[str, str] | None = None) -> ShotSource | None:
+    """A source reading live telemetry, or ``None`` if this deployment cannot reach it.
+
+    ``None`` rather than an exception, because a board with no Grafana is a legitimate
+    local run and should still serve its in-memory store. That is the opposite of the
+    diagnose route's handling, where a missing MCP URL is a hard 503: there, staying
+    quiet would render as a shot with no problems found, which is a false statement about
+    the render. Here it renders as a board with no shots, which is simply the truth about
+    an unconfigured deployment.
+    """
+    values = os.environ if env is None else env
+    url = (values.get(MCP_URL_ENV) or "").strip()
+    if not url:
+        return None
+
+    from .mcp_client import GrafanaMCP
+    from .mcp_transport import connect
+    from .shot_source import GrafanaShotSource
+
+    prometheus_uid = (values.get(PROMETHEUS_UID_ENV) or "").strip() or None
+    loki_uid = (values.get(LOKI_UID_ENV) or "").strip() or None
+
+    class _PerRequest:
+        """Opens a fresh MCP session per refresh.
+
+        Not a long-lived session: Cloud Run freezes an instance between requests, and a
+        socket held across that comes back dead in a way that surfaces as a slow failure
+        on the next page load rather than a clean reconnect.
+        """
+
+        async def list_shots(self) -> list[Shot]:
+            async with connect(url) as session:
+                grafana = GrafanaMCP(session, prometheus_uid=prometheus_uid, loki_uid=loki_uid)
+                return await GrafanaShotSource(grafana).list_shots()
+
+    return _PerRequest()
+
+
 def cors_origins(env: Mapping[str, str] | None = None) -> list[str]:
     """The browser origins allowed to read the board.
 
@@ -161,6 +210,7 @@ def create_app(
     *,
     allow_origins: Sequence[str] | None = None,
     diagnose: Diagnose | None = None,
+    shot_source: ShotSource | None = None,
 ) -> FastAPI:
     """Build the board API over ``store``.
 
@@ -176,12 +226,21 @@ def create_app(
             module-global for the same reason ``store`` is: two apps in one process must
             not share it, and a test must not have to reach production to exercise a
             route.
+        shot_source: Where the board's rows come from. Omit it and one is built from the
+            environment when the deployment can reach Grafana, so the board populates
+            itself from telemetry; pass one to serve a fixed list without a network.
+            Pass nothing and configure nothing, and the in-memory store is served as
+            before, which is what a local run without a Grafana wants.
     """
     # `is None`, not `or`: ShotStore defines __len__, so an empty store passed in by a
     # caller is falsy and `store or ShotStore()` would quietly swap it for a different
     # one. The bug would only show up once something upserted into the caller's store and
     # the board kept answering with an empty list.
     shots = ShotStore() if store is None else store
+    # `is None` again, not `or`: a caller-supplied source must never be swapped out, and
+    # building the default here rather than per request means an unconfigured deployment
+    # does not re-read the environment on every page load to reach the same conclusion.
+    source = build_shot_source() if shot_source is None else shot_source
 
     app = FastAPI(
         title="Dailies",
@@ -233,12 +292,47 @@ def create_app(
         """
         return Health()
 
+    async def refresh() -> None:
+        """Fold whatever telemetry knows about into the store.
+
+        An upsert per shot rather than replacing the store, because the two sides know
+        different things and neither is complete on its own. Telemetry is authoritative
+        on which shots exist and how far along they are; it has no idea what the
+        investigator concluded. Overwriting the row wholesale would erase the diagnosis
+        the instant the board polled again, which is the one thing on the page a
+        supervisor is actually reading.
+
+        A telemetry failure is swallowed deliberately. Grafana being briefly unreachable
+        must not present as "no renders exist": that is indistinguishable, on the page,
+        from a farm that has not started, and it is the more alarming of the two. The
+        board keeps serving what it already had and the cause goes to the log.
+        """
+        if source is None:
+            return
+        try:
+            discovered = await source.list_shots()
+        except Exception:  # noqa: BLE001 - deliberate; see the docstring above
+            # Broad on purpose, and not re-raised. Refreshing is best-effort decoration
+            # on a read that must always answer: a Grafana hiccup, an expired token, a
+            # protocol change upstream, none of them are reasons to fail a page load and
+            # all of them present identically to a supervisor. The cause goes to Cloud
+            # Logging with a traceback; the board keeps serving what it already holds.
+            _log.exception("Could not refresh shots from telemetry; serving what is held")
+            return
+        for found in discovered:
+            held = shots.get(found.id)
+            # Keep the fields telemetry cannot speak to, take the ones it owns.
+            shots.upsert(
+                found if held is None else found.model_copy(update={"diagnosis": held.diagnosis})
+            )
+
     @app.get("/api/shots", response_model=ShotList, tags=["shots"])
-    def list_shots() -> ShotList:
-        """Every shot being watched."""
+    async def list_shots() -> ShotList:
+        """Every shot being watched, refreshed from telemetry first."""
+        await refresh()
         return ShotList(shots=shots.all())
 
-    def watched(shot_id: str) -> Shot:
+    async def watched(shot_id: str) -> Shot:
         """The shot, or the 404 both shot routes answer an unknown id with.
 
         One helper rather than two copies of the message: the detail route and the
@@ -246,6 +340,12 @@ def create_app(
         404s for the same id would look like two different failures.
         """
         shot = shots.get(shot_id)
+        if shot is None:
+            # Refresh before answering 404. A board that lists a shot and then 404s on
+            # it is worse than an empty one, and on a cold instance the list route may
+            # not have run yet in this process.
+            await refresh()
+            shot = shots.get(shot_id)
         if shot is None:
             # Name the id and say how many shots exist. "Not found" alone leaves a caller
             # unable to tell a typo'd id from a board that is watching nothing yet, and
@@ -262,9 +362,9 @@ def create_app(
         return shot
 
     @app.get("/api/shots/{shot_id}", response_model=Shot, tags=["shots"])
-    def get_shot(shot_id: str) -> Shot:
+    async def get_shot(shot_id: str) -> Shot:
         """One shot's current standing, or 404 if it is not being watched."""
-        return watched(shot_id)
+        return await watched(shot_id)
 
     @app.post("/api/shots/{shot_id}/diagnose", response_model=Shot, tags=["shots"])
     async def diagnose_shot(shot_id: str) -> Shot:
@@ -307,7 +407,7 @@ def create_app(
         Runs for as long as the investigation takes, which is several sequential Grafana
         queries plus a Gemini call. The Cloud Run service allows 600s for it.
         """
-        shot = watched(shot_id)
+        shot = await watched(shot_id)
         run = diagnose
         if run is None:
             # Built per request, from the environment as the revision currently has it,
