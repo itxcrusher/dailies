@@ -1,8 +1,8 @@
 # The board API, plus the ADK investigator it hosts.
 #
-# Build context is the REPO ROOT, not infra/: the distribution declares three package
-# roots (packages/telemetry, packages/render, apps/api) in one pyproject, so pip needs
-# all of them present at the same relative paths.
+# Build context is the REPO ROOT, not infra/: the distribution declares four package
+# roots (packages/telemetry, packages/render, packages/graph, apps/api) in one pyproject,
+# so pip needs all of them present at the same relative paths.
 #
 #   docker build -f infra/Dockerfile.api -t <tag> .
 #
@@ -34,7 +34,7 @@ RUN pip install --no-cache-dir ".[agent]"
 # install. `pip install .` resolves packages differently from the editable install the
 # tests run under, and a missing module surfaces here as a red build rather than as a
 # Cloud Run revision that never becomes ready.
-RUN python -c "import dailies_api.main, dailies_api.agent, dailies_render.worker, dailies_telemetry.emitter; print('imports ok')"
+RUN python -c "import dailies_api.main, dailies_api.agent, dailies_api.guardian, dailies_graph.model, dailies_graph.forecast, dailies_render.worker, dailies_telemetry.emitter; print('imports ok')"
 
 # Not root. Nothing here needs to write to the filesystem at runtime.
 RUN useradd --create-home --uid 1001 dailies
