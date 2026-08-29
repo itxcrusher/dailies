@@ -356,6 +356,15 @@ resource "google_cloud_run_v2_service" "mcp_grafana" {
       }
     }
   }
+
+  # Same race the api and render services guard against: the secret is referenced by
+  # name, so nothing makes Terraform order the accessor grant before the revision, and
+  # Cloud Run checks that grant when it creates the revision. This service is now the
+  # head of the chain (the api reads mcp_grafana.uri), so it is the first one created
+  # and the most exposed to it.
+  depends_on = [
+    google_secret_manager_secret_iam_member.runtime_grafana_token,
+  ]
 }
 
 # Only the runtime service account may invoke it. No allUsers binding here on purpose:
