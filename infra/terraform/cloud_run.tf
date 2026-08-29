@@ -314,9 +314,18 @@ resource "google_cloud_run_v2_service" "mcp_grafana" {
       # Cloud Run hostname has to be named here or nothing can reach it. The upstream
       # README notes "*" is only safe behind a trusted reverse proxy; naming the host
       # costs nothing and keeps the DNS-rebinding protection doing its job.
+      # Every hostname Cloud Run will answer on, not just one. Cloud Run publishes a
+      # service under two forms - the <name>-<hash>-<region>.a.run.app one that .uri
+      # returns, and a <name>-<project-number>.<region>.run.app one - and both resolve.
+      # Trusting a single host meant the URL Terraform wired into the API
+      # (google_cloud_run_v2_service.mcp_grafana.uri) was NOT the one the server would
+      # accept, so every diagnosis in production answered "forbidden: host not allowed"
+      # while every test stayed green, because no test speaks to the real server.
+      # --allowed-hosts takes a comma-separated list; the DNS-rebinding protection still
+      # does its job, it just knows both of this service's real names.
       args = [
         "-t", "streamable-http",
-        "--allowed-hosts", var.mcp_grafana_host,
+        "--allowed-hosts", join(",", var.mcp_grafana_hosts),
       ]
 
       ports {

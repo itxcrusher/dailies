@@ -117,14 +117,21 @@ variable "mcp_grafana_image" {
   EOT
 }
 
-variable "mcp_grafana_host" {
-  type        = string
+variable "mcp_grafana_hosts" {
+  type        = list(string)
   description = <<-EOT
-    The Cloud Run hostname the MCP service answers on, for its --allowed-hosts allowlist.
+    Every hostname the MCP service should trust in its Host header, for --allowed-hosts.
 
-    Chicken-and-egg on a first apply: the hostname is not known until the service exists.
-    Apply once with a placeholder, read the URL from the console or `terraform state`,
-    set it here, and apply again. Two applies is the honest cost of the server validating
-    its own Host header, and is preferable to disabling that check with "*".
+    List, not a single string, because Cloud Run answers on more than one name for the
+    same service: the `<name>-<hash>-<region>.a.run.app` form that `.uri` returns, and the
+    `<name>-<project-number>.<region>.run.app` form. mcp-grafana rejects any Host it was
+    not told about, so naming only one of them produces a service that works when you
+    curl it by hand and fails from the API, which is the worst way to find out.
+
+    Chicken-and-egg on a first apply: the hostnames are not known until the service
+    exists. Apply once with a placeholder, read the URLs back, set them here, apply again.
+    Two applies is the honest cost of the server validating its own Host header, and it is
+    preferable to disabling that check with "*", which upstream warns is only safe behind
+    a trusted reverse proxy.
   EOT
 }
