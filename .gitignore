@@ -20,3 +20,7 @@ renders/
 *.tfstate
 *.tfstate.*
 terraform.tfvars
+
+# tsc --noEmit runs incrementally, so `npm run typecheck` in apps/web drops one of these
+# beside the tsconfig. A build artefact, and per-machine.
+*.tsbuildinfo

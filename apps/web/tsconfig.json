@@ -17,5 +17,11 @@
     "paths": { "@/*": ["./*"] }
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
-  "exclude": ["node_modules"]
+  // The unit tests are run by node's own test runner with type stripping, not by Next,
+  // so they import a sibling by its real ".ts" path. tsc rejects that spelling unless
+  // `allowImportingTsExtensions` is on, and turning that on for the whole app would let
+  // the same spelling into the page graph, where Next would not resolve it. Excluding
+  // the tests keeps the app's rule strict and costs nothing: `node --test` typechecks
+  // nothing either way, and the module under test is still fully checked.
+  "exclude": ["node_modules", "**/*.test.ts", "**/*.test.tsx"]
 }

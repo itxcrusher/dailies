@@ -1,5 +1,6 @@
 /**
- * The board: every shot being watched, and where it stands against the deadline.
+ * The board: every shot being watched, where it stands against the deadline, and what
+ * the investigator found when it was asked.
  *
  * Deliberately a server component. The board is read on a laptop in a machine room and
  * on a phone in a review theatre, and a client-side fetch would mean the API's URL and
@@ -7,11 +8,14 @@
  * on the server, a failure is visible in one place (this page) and the API can stay
  * closed to cross-origin reads entirely.
  *
- * This is the minimal shape the vertical slice needs: the real design pass is a later
- * task. What is NOT deferred is the numeric alignment (see `.num` in globals.css) -
- * frame counts are a column that gets scanned vertically, and proportional digits make
- * that scan slower for no reason.
+ * What the layout is organised around: the evidence. A cause on its own is a sentence a
+ * model produced, and a supervisor cannot act on it without re-doing the investigation.
+ * The queries behind it are what make the claim checkable, so they are rendered in full,
+ * numbered, in the monospace they would be pasted back into Grafana as, rather than
+ * folded away behind a disclosure nobody opens at 2am.
  */
+
+import { normalizeDiagnosis, type Diagnosis } from "./diagnosis";
 
 type Risk = "ON_TRACK" | "WATCH" | "AT_RISK" | "CRITICAL" | "MISSED";
 
@@ -22,6 +26,9 @@ type Shot = {
   risk: Risk;
   diagnosis: Record<string, unknown> | null;
 };
+
+/** How many columns the summary row has, so the diagnosis row can span exactly it. */
+const COLUMNS = 5;
 
 /**
  * Where the API lives.
@@ -71,15 +78,124 @@ function percent(done: number, total: number): number {
   return Math.round((done / total) * 100);
 }
 
+/**
+ * The confidence the investigator reported, or nothing.
+ *
+ * Rendered as a word and not only as a colour: a chip that is merely orange asks the
+ * reader to remember a legend, and the point of the field is that "low" is a real answer
+ * which should be exactly as readable as "high".
+ */
+function ConfidenceChip({ confidence }: { confidence: Diagnosis["confidence"] }) {
+  if (confidence === null) {
+    return null;
+  }
+  return (
+    <span className={`confidence confidence-${confidence}`}>
+      <span className="confidence-dot" aria-hidden="true" />
+      {confidence} confidence
+    </span>
+  );
+}
+
+/**
+ * The evidence: the queries that were run and what each one showed.
+ *
+ * Numbered, because a supervisor talking to a lighting TD says "the second query", and
+ * the numbers are tabular so a list of ten stays aligned down its left edge. A query is
+ * shown in full and allowed to wrap rather than truncated or put behind a scrollbar: it
+ * is the thing a reader pastes back into Grafana to check the claim, and half of one is
+ * no use. Soft wrapping keeps the copied text identical to the query that was run.
+ */
+function Evidence({ entries }: { entries: Diagnosis["evidence"] }) {
+  if (entries.length === 0) {
+    // Reachable: DIAGNOSIS_SCHEMA requires at least one entry, so an answer without any
+    // has already broken its contract, and saying so is more use than an absent section
+    // that reads as though nobody looked.
+    return <p className="evidence-missing">This answer arrived with no queries behind it.</p>;
+  }
+  return (
+    <ol className="evidence-list">
+      {entries.map((entry, index) => (
+        <li key={index} className="evidence-item">
+          <span className="evidence-index tnum" aria-hidden="true">
+            {String(index + 1).padStart(2, "0")}
+          </span>
+          <div className="evidence-body">
+            {entry.query ? (
+              <code className="evidence-query">{entry.query}</code>
+            ) : (
+              <p className="evidence-unsupported">No query was reported for this finding.</p>
+            )}
+            {entry.finding ? <p className="evidence-finding">{entry.finding}</p> : null}
+          </div>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+/** Everything the investigator said about one shot, under that shot's row. */
+function DiagnosisPanel({ shotId, diagnosis }: { shotId: string; diagnosis: Diagnosis }) {
+  const hasFacts = diagnosis.affectedFrames !== null || diagnosis.recommendedAction !== null;
+  return (
+    <section className="diagnosis" aria-label={`Investigator diagnosis for ${shotId}`}>
+      <div className="diagnosis-head">
+        <h2 className="diagnosis-title">Investigator diagnosis</h2>
+        <ConfidenceChip confidence={diagnosis.confidence} />
+      </div>
+
+      {diagnosis.cause ? <p className="cause">{diagnosis.cause}</p> : null}
+
+      {hasFacts ? (
+        <dl className="facts">
+          {diagnosis.affectedFrames !== null ? (
+            <div className="fact">
+              <dt>Affected frames</dt>
+              <dd className="tnum">{diagnosis.affectedFrames}</dd>
+            </div>
+          ) : null}
+          {diagnosis.recommendedAction !== null ? (
+            <div className="fact">
+              <dt>Recommended action</dt>
+              <dd>{diagnosis.recommendedAction}</dd>
+            </div>
+          ) : null}
+        </dl>
+      ) : null}
+
+      <div className="evidence">
+        <h3 className="evidence-head">
+          Evidence
+          <span className="evidence-count tnum">
+            {diagnosis.evidence.length} quer{diagnosis.evidence.length === 1 ? "y" : "ies"}
+          </span>
+        </h3>
+        <Evidence entries={diagnosis.evidence} />
+      </div>
+    </section>
+  );
+}
+
 export default async function Board() {
   const { shots, error } = await fetchShots();
+  // Normalised once, here, so the count in the header and the rows below can never
+  // disagree about which shots carry an answer.
+  const rows = shots.map((shot) => ({ shot, diagnosis: normalizeDiagnosis(shot.diagnosis) }));
+  const diagnosed = rows.filter((row) => row.diagnosis !== null).length;
 
   return (
     <main>
       <header>
         <h1>Dailies</h1>
         <p>
-          {shots.length} shot{shots.length === 1 ? "" : "s"} watched &middot; reading{" "}
+          <span className="tnum">{shots.length}</span> shot{shots.length === 1 ? "" : "s"} watched
+          {diagnosed > 0 ? (
+            <>
+              {" · "}
+              <span className="tnum">{diagnosed}</span> diagnosed
+            </>
+          ) : null}
+          {" · reading "}
           {apiBase()}
         </p>
       </header>
@@ -89,7 +205,7 @@ export default async function Board() {
           <p className="error">
             No shot data. <code>{error}</code>
           </p>
-        ) : shots.length === 0 ? (
+        ) : rows.length === 0 ? (
           <p className="empty">No shots are being watched yet.</p>
         ) : (
           <table>
@@ -108,9 +224,12 @@ export default async function Board() {
                 <th scope="col">Risk</th>
               </tr>
             </thead>
-            <tbody>
-              {shots.map((shot) => (
-                <tr key={shot.id}>
+            {/* One tbody per shot: it binds a summary row to the diagnosis row that
+                belongs to it, so the pairing survives for anyone reading the markup and
+                the rule between shots can be drawn between groups rather than rows. */}
+            {rows.map(({ shot, diagnosis }) => (
+              <tbody key={shot.id} className={diagnosis ? "shot diagnosed" : "shot"}>
+                <tr className="shot-row">
                   <td className="id">{shot.id}</td>
                   <td className="num">{shot.frames_done}</td>
                   <td className="num">{shot.frames_total}</td>
@@ -119,8 +238,15 @@ export default async function Board() {
                     <span className={`risk risk-${shot.risk}`}>{shot.risk.replace("_", " ")}</span>
                   </td>
                 </tr>
-              ))}
-            </tbody>
+                {diagnosis ? (
+                  <tr className="diagnosis-row">
+                    <td colSpan={COLUMNS}>
+                      <DiagnosisPanel shotId={shot.id} diagnosis={diagnosis} />
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            ))}
           </table>
         )}
       </div>

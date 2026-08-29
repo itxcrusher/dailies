@@ -1,10 +1,24 @@
+/* The board is read in a dim machine room at 2am, next to a projector, and on a phone in
+   a review theatre. Everything below is chosen for legibility in that room rather than
+   for looking novel in a screenshot: one dark ground, a small number of hues that each
+   mean exactly one thing, and no state that is signalled by colour alone. */
+
 :root {
   color-scheme: dark;
+  /* The page's own side padding, as a variable because the diagnosis has to subtract it
+     from the viewport to work out how wide it may be. See `.diagnosis`. */
+  --page-pad: 1.5rem;
   --bg: #0b0d10;
   --panel: #14181d;
+  /* One step below the panel: what a diagnosis sits on, so an answer reads as attached
+     to the row above it rather than floating as another card on the same plane. */
+  --sunken: #0f1317;
   --line: #232a32;
   --text: #e7edf3;
   --muted: #8b97a5;
+  /* Machine input: the queries the investigator actually ran. Distinct from every risk
+     hue, because a query is not a severity. */
+  --query: #7dd3fc;
   --on-track: #4ade80;
   --watch: #fbbf24;
   --at-risk: #fb923c;
@@ -29,7 +43,7 @@ body {
 main {
   max-width: 68rem;
   margin: 0 auto;
-  padding: 3rem 1.5rem 4rem;
+  padding: 3rem var(--page-pad) 4rem;
 }
 
 header h1 {
@@ -74,16 +88,23 @@ th {
   font-weight: 600;
 }
 
-tbody tr:last-child td {
+/* One tbody per shot, so the rule that separates shots is drawn between groups. The last
+   group closes against the panel border and needs no rule of its own. */
+tbody.shot:last-child > tr:last-child > td {
   border-bottom: none;
 }
 
-/* Every figure in the table is a column of numbers a supervisor scans vertically.
-   Proportional digits make the columns ragged and the comparison slower, so the numeric
-   cells opt into tabular figures and right alignment. */
-.num {
+/* Every figure on this page is compared against another one: frame counts down a column,
+   evidence indices down a list, a frame range against the range in a log line.
+   Proportional digits make all three comparisons slower, so anything numeric opts into
+   tabular figures. `.num` adds the column alignment that only a table cell wants. */
+.num,
+.tnum {
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum" 1;
+}
+
+.num {
   text-align: right;
   white-space: nowrap;
 }
@@ -119,6 +140,217 @@ tbody tr:last-child td {
   color: var(--missed);
 }
 
+/* A diagnosed shot's own row loses its rule: the answer below it belongs to it, and a
+   line between the two would read as a boundary between two unrelated things. */
+tbody.diagnosed > .shot-row > td {
+  border-bottom: none;
+}
+
+.diagnosis-row > td {
+  padding: 0 1rem 1.1rem;
+  background: var(--sunken);
+}
+
+/* The whole answer is bracketed by one rule down its left edge, which is what carries
+   "this belongs to the row above" across the width of the table.
+
+   Sticky, and never wider than the screen, because of what the table around it does. The
+   table has a 40rem minimum and the panel scrolls sideways, so on a phone a diagnosis
+   laid out at the table's width has its evidence off the right edge - the one thing on
+   this page that must be read is the one thing hidden. Driven at 390px before this rule
+   existed and the second query was cut mid-selector.
+
+   `min(100%, ...)` leaves the desktop case alone: there the viewport is wider than the
+   cell, so 100% wins and nothing moves. On a narrow screen the diagnosis sizes itself to
+   what is actually visible (the viewport, less the page padding and the cell's own), and
+   `sticky` holds it against the left edge so it stays readable while a supervisor scrolls
+   the frame columns sideways. */
+.diagnosis {
+  position: sticky;
+  left: 0;
+  width: min(100%, calc(100vw - (var(--page-pad) + 1rem) * 2 - 2px));
+  border-left: 2px solid var(--line);
+  padding: 0.1rem 0 0 0.9rem;
+}
+
+.diagnosis-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.6rem;
+}
+
+.diagnosis-title {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+/* Confidence is a word first and a colour second. A chip that is only orange asks the
+   reader to hold a legend in their head, and "low" has to be as readable as "high" or
+   the field stops being an honest answer. */
+.confidence {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.confidence-dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.confidence-high {
+  color: var(--on-track);
+}
+.confidence-medium {
+  color: var(--watch);
+}
+.confidence-low {
+  color: var(--at-risk);
+}
+
+/* The claim. Larger than the table it sits under, because it is the sentence a
+   supervisor reads first and then decides whether to check. */
+.cause {
+  margin: 0.5rem 0 0;
+  max-width: 64ch;
+  font-size: 1.02rem;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 2.25rem;
+  margin: 0.85rem 0 0;
+}
+
+.fact {
+  min-width: 0;
+}
+
+.fact dt {
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.fact dd {
+  margin: 0.15rem 0 0;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  max-width: 52ch;
+  color: var(--text);
+}
+
+/* A frame range is read against the frame numbers in a log line, so it is set in the same
+   monospace those appear in. */
+.fact dd.tnum {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.88rem;
+}
+
+/* The evidence is the reason this panel exists: it is what makes the cause checkable
+   rather than asserted, so it gets the most room and the strongest structure. */
+.evidence {
+  margin-top: 1.1rem;
+}
+
+.evidence-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin: 0 0 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.evidence-count {
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: var(--muted);
+  opacity: 0.85;
+}
+
+.evidence-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.evidence-item {
+  display: grid;
+  grid-template-columns: 1.6rem minmax(0, 1fr);
+  gap: 0.55rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.evidence-index {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.evidence-body {
+  min-width: 0;
+}
+
+/* Shown whole, and allowed to wrap. This is the string a reader pastes back into Grafana
+   to check the answer, so truncating it or hiding half of it behind a scrollbar would
+   defeat the point of printing it at all. Soft wrapping leaves the copied text identical
+   to the query that ran. */
+.evidence-query {
+  display: block;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--query);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.evidence-finding {
+  margin: 0.35rem 0 0;
+  font-size: 0.88rem;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+/* Both of these mark an answer that broke DIAGNOSIS_SCHEMA on the way here. Said out
+   loud, in the warning hue, because an absent evidence section would read as though
+   nobody looked rather than as an answer that cannot be checked. */
+.evidence-missing,
+.evidence-unsupported {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--watch);
+}
+
 .empty,
 .error {
   padding: 1.5rem;
@@ -133,4 +365,29 @@ tbody tr:last-child td {
 .error code {
   color: var(--muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* On a phone in a review theatre the table already scrolls sideways inside the panel.
+   The diagnosis must not add a second axis of scrolling, so its inset shrinks and the
+   fact pairs stack instead of sitting side by side. */
+@media (max-width: 40rem) {
+  :root {
+    --page-pad: 1rem;
+  }
+
+  main {
+    padding: 2rem var(--page-pad) 3rem;
+  }
+
+  .diagnosis {
+    padding-left: 0.7rem;
+  }
+
+  /* Side by side, a frame range and a whole sentence of recommended action leave the
+     action with three words a line. Stacked, each gets the width it needs. */
+  .facts {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.6rem;
+  }
 }
