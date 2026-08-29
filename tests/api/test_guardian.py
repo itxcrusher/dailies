@@ -142,9 +142,10 @@ def test_the_band_edges_are_pinned(ratio, expected):
     by one band and no test would notice.
     """
     remaining = 1000.0
-    assert assess(
-        slack_seconds=ratio * remaining, remaining_seconds=remaining, confidence="high"
-    ) is expected
+    assert (
+        assess(slack_seconds=ratio * remaining, remaining_seconds=remaining, confidence="high")
+        is expected
+    )
 
 
 def test_a_second_verdict_source_can_only_redden_the_row():
