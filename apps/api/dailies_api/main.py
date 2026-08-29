@@ -138,7 +138,23 @@ def create_app(
 
     @app.get("/healthz", response_model=Health, tags=["ops"])
     def healthz() -> Health:
-        """Liveness. Answers as soon as the process can serve, and checks nothing else."""
+        """Liveness. Answers as soon as the process can serve, and checks nothing else.
+
+        Unreachable on Cloud Run: its Google Frontend returns its own HTML 404 for
+        ``/healthz`` and never forwards the request. Kept because the image also runs
+        outside Cloud Run, where this is the conventional path. Use ``/api/health``
+        for anything that must work in production.
+        """
+        return Health()
+
+    @app.get("/api/health", response_model=Health, tags=["ops"])
+    def api_health() -> Health:
+        """Liveness on a path Cloud Run does not reserve.
+
+        Verified against the deployed service: ``/healthz`` returns Google's HTML 404
+        from the edge, while every other path reaches the container. This is the health
+        endpoint to point uptime checks, runbooks and judges at.
+        """
         return Health()
 
     @app.get("/api/shots", response_model=ShotList, tags=["shots"])

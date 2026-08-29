@@ -64,6 +64,22 @@ def test_healthz_reports_ok():
     assert _client().get("/healthz").json() == {"ok": True}
 
 
+def test_health_is_reachable_on_a_path_cloud_run_does_not_reserve():
+    """Cloud Run's Google Frontend swallows /healthz before it reaches the container.
+
+    Verified against the deployed service on 2026-08-29: /healthz returned a 404 with
+    Google's own HTML error page, while /health, /livez and /api/healthz all returned
+    FastAPI's JSON 404 from inside the container, and /openapi.json returned 200. Same
+    revision, same container: the edge reserves that one path.
+
+    So the process needs a liveness path that is actually reachable in production.
+    /healthz stays for local use and for anyone running the image outside Cloud Run.
+    """
+    r = _client().get("/api/health")
+    assert r.status_code == 200
+    assert r.json() == {"ok": True}
+
+
 def test_shots_endpoint_serves_the_injected_store():
     store = ShotStore()
     store.upsert(Shot(id="SH040", frames_total=240, frames_done=96, risk=Risk.AT_RISK))
