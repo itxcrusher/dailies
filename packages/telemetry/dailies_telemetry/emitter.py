@@ -37,6 +37,7 @@ is the ``MeterProvider``'s business, which is what lets the tests hand it an in-
 reader and the deployment hand it an OTLP exporter with nothing else changing.
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 from opentelemetry.metrics import MeterProvider
@@ -94,6 +95,20 @@ class RenderTelemetry:
             METRICS[Metric.FRAMES_FAILED],
             description="Frames that failed to render",
         )
+        # Job-level progress: the two series the board reconstructs a shot's standing
+        # from. They are job-scoped, never per-frame, so `completed / expected` is a
+        # single division in PromQL rather than an aggregation over a series per frame.
+        self._completed = meter.create_counter(
+            METRICS[Metric.FRAMES_COMPLETED],
+            description="Frames this job has finished rendering",
+        )
+        # A gauge, not a counter, and the distinction is not pedantic: a shot re-scoped
+        # mid-render holds its new frame count, not the sum of every count it has ever
+        # had. `_total` is the counter suffix and is deliberately absent from this name.
+        self._expected = meter.create_gauge(
+            METRICS[Metric.FRAMES_EXPECTED],
+            description="Frames this job contains",
+        )
 
     def record(self, event: RenderEvent) -> None:
         """Fan one event out to every instrument it carries a reading for.
@@ -114,5 +129,23 @@ class RenderTelemetry:
         if event.memory_bytes is not None:
             self._memory.set(event.memory_bytes, event.worker_labels())
 
+        if event.kind is EventKind.FRAME_COMPLETE:
+            self._completed.add(1, event.job_labels())
+
         if event.kind in FAILURE_KINDS:
             self._failed.add(1, event.failure_labels())
+
+    def declare_job(self, *, frames_expected: int, labels: Mapping[str, str]) -> None:
+        """Publish how many frames this job contains.
+
+        Separate from :meth:`record` because it is not derivable from the render's
+        output. Blender never announces its own frame range; the number lives in the
+        request that launched the job, so the worker states it once at the start rather
+        than the parser inferring it. Without it there is a completed count with nothing
+        to divide by, and "how far along is SH030" has no answer.
+
+        Args:
+            frames_expected: Frames in this job, inclusive of both ends of the range.
+            labels: Job-scoped identity, normally ``RenderEvent.job_labels()``.
+        """
+        self._expected.set(frames_expected, dict(labels))

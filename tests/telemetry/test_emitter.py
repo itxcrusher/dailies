@@ -15,6 +15,7 @@ default.
 from dailies_telemetry.emitter import FRAME_DURATION_BUCKETS_SECONDS, RenderTelemetry
 from dailies_telemetry.schema import (
     FAILURE_LABELS,
+    JOB_LABELS,
     JOB_WORKER_LABELS,
     METRICS,
     WORKER_LABELS,
@@ -230,3 +231,82 @@ def test_kind_deserialised_from_a_string_still_routes():
     metrics = collect(reader)
     assert metrics[METRICS[Metric.FRAME_DURATION]].data.data_points[0].sum == 2.0
     assert metrics[METRICS[Metric.FRAMES_FAILED]].data.data_points[0].value == 1
+
+
+# --- job-level progress -------------------------------------------------------------
+#
+# The board reconstructs a shot's standing from Prometheus rather than from a store the
+# API keeps in memory, so "how far along is this shot" has to exist as telemetry. Before
+# these, METRICS declared render_job_frames_expected and render_job_frames_completed_total
+# and nothing ever created the instruments: the names resolved in Python and the series
+# did not exist in Grafana, which is the worst of both, because a PromQL query written
+# against them returns an empty result rather than an error.
+
+
+def test_frame_complete_increments_frames_completed():
+    tel, reader = make()
+    tel.record(
+        RenderEvent.demo(kind=EventKind.FRAME_COMPLETE, shot="SH010", frame=1, duration_seconds=4.0)
+    )
+    tel.record(
+        RenderEvent.demo(kind=EventKind.FRAME_COMPLETE, shot="SH010", frame=2, duration_seconds=5.0)
+    )
+
+    metrics = collect(reader)
+    assert METRICS[Metric.FRAMES_COMPLETED] in metrics
+    points = metrics[METRICS[Metric.FRAMES_COMPLETED]].data.data_points
+    assert len(points) == 1, "both frames belong to one job series"
+    assert points[0].value == 2
+
+
+def test_frames_completed_is_job_scoped_not_per_frame():
+    tel, reader = make()
+    for frame in (1, 2, 3):
+        tel.record(
+            RenderEvent.demo(
+                kind=EventKind.FRAME_COMPLETE, shot="SH010", frame=frame, duration_seconds=1.0
+            )
+        )
+
+    point = collect(reader)[METRICS[Metric.FRAMES_COMPLETED]].data.data_points[0]
+    # Same reasoning as the duration histogram: a frame number is unique per observation,
+    # so labelling by it turns a counter into one series per frame and the progress query
+    # has nothing to sum.
+    assert set(point.attributes) == set(JOB_LABELS)
+    assert "frame" not in point.attributes
+    assert "worker" not in point.attributes
+
+
+def test_a_failed_frame_is_not_a_completed_one():
+    tel, reader = make()
+    tel.record(RenderEvent.demo(kind=EventKind.FRAME_FAILED, shot="SH010", frame=1, message="boom"))
+
+    metrics = collect(reader)
+    assert METRICS[Metric.FRAMES_COMPLETED] not in metrics, (
+        "a failure must not advance progress; the delivery estimate is built on this"
+    )
+
+
+def test_declaring_a_job_publishes_how_many_frames_it_holds():
+    tel, reader = make()
+    event = RenderEvent.demo(kind=EventKind.FRAME_START, shot="SH010", frame=1)
+
+    tel.declare_job(frames_expected=48, labels=event.job_labels())
+
+    metrics = collect(reader)
+    assert METRICS[Metric.FRAMES_EXPECTED] in metrics
+    point = metrics[METRICS[Metric.FRAMES_EXPECTED]].data.data_points[0]
+    assert point.value == 48
+    assert set(point.attributes) == set(JOB_LABELS)
+
+
+def test_redeclaring_a_job_overwrites_rather_than_accumulates():
+    tel, reader = make()
+    labels = RenderEvent.demo(kind=EventKind.FRAME_START, shot="SH010", frame=1).job_labels()
+
+    tel.declare_job(frames_expected=48, labels=labels)
+    tel.declare_job(frames_expected=50, labels=labels)
+
+    # A gauge, not a counter: a shot re-scoped mid-render holds 50 frames, not 98.
+    point = collect(reader)[METRICS[Metric.FRAMES_EXPECTED]].data.data_points[0]
+    assert point.value == 50

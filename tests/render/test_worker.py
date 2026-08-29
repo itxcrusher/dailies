@@ -193,3 +193,49 @@ def test_identity_covers_every_label_a_stamped_event_needs():
     )
 
     assert UNKNOWN not in stamped.frame_labels().values()
+
+
+# --- job declaration ----------------------------------------------------------------
+
+
+def test_record_stream_declares_the_frame_range_before_recording():
+    """The frame count is in the request, not in Blender's output.
+
+    Blender never announces how many frames it is about to render, so nothing in the
+    stream can be parsed into it. If the worker does not state it, the board has a
+    completed count and nothing to divide by.
+    """
+    declared: list[tuple[int, dict[str, str]]] = []
+
+    class Spy:
+        def declare_job(self, *, frames_expected, labels):
+            declared.append((frames_expected, dict(labels)))
+
+        def record(self, event):
+            pass
+
+    request = RenderRequest(shot="SH010", frame_start=10, frame_end=57, render_job="job-7")
+    record_stream([], request, Spy())
+
+    assert declared, "the job must be declared even before any line arrives"
+    frames, labels = declared[0]
+    # Inclusive on both ends, matching Blender's --frame-start / --frame-end.
+    assert frames == 48
+    assert labels["shot"] == "SH010"
+    assert labels["render_job"] == "job-7"
+    assert "frame" not in labels
+    assert "worker" not in labels
+
+
+def test_a_single_frame_render_declares_one_frame():
+    declared: list[int] = []
+
+    class Spy:
+        def declare_job(self, *, frames_expected, labels):
+            declared.append(frames_expected)
+
+        def record(self, event):
+            pass
+
+    record_stream([], RenderRequest(shot="SH010", frame_start=7, frame_end=7), Spy())
+    assert declared == [1]

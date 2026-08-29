@@ -35,7 +35,7 @@ from typing import IO, Final
 
 from dailies_telemetry.emitter import RenderTelemetry
 from dailies_telemetry.log_emitter import RenderLogEmitter
-from dailies_telemetry.schema import RenderEvent
+from dailies_telemetry.schema import JOB_LABELS, RenderEvent
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.sdk._logs import LoggerProvider
@@ -109,6 +109,26 @@ class RenderRequest:
             "scene": self.scene,
             "priority": self.priority,
         }
+
+    @property
+    def frames_expected(self) -> int:
+        """How many frames this request covers, inclusive of both ends.
+
+        Inclusive because that is what Blender's ``--frame-start`` / ``--frame-end``
+        mean, and the same arithmetic already appears in the command builder. A
+        single-frame render sets both to the same number and expects one frame, not zero.
+        """
+        return self.frame_end - self.frame_start + 1
+
+    @property
+    def job_labels(self) -> dict[str, str]:
+        """Job-scoped identity: :attr:`identity` without the per-worker axes.
+
+        Filtered through ``JOB_LABELS`` rather than by listing keys again, so a label
+        added to the schema does not silently skip this path.
+        """
+        merged = {**self.identity, "shot": self.shot}
+        return {name: merged[name] for name in JOB_LABELS if name in merged}
 
 
 def build_command(request: RenderRequest) -> list[str]:
@@ -274,6 +294,13 @@ def record_stream(
     investigator would cite. ``logs`` is optional so the existing tests, and any caller
     that only wants metrics, keep working unchanged.
     """
+    # Declared before the first line is read, not after the loop: an OOM is a SIGKILL,
+    # so a render that dies mid-shot never reaches the end of this function. Stating the
+    # frame count up front means the failure is still legible - "12 of 48, then nothing"
+    # rather than a completed count with no denominator, which is exactly the shape a
+    # delivery-risk estimate needs when a job dies.
+    telemetry.declare_job(frames_expected=request.frames_expected, labels=request.job_labels)
+
     recorded = 0
     for event in render_from_stream(_tee(lines, echo), shot=request.shot):
         stamped = _stamp(event, request)
