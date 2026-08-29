@@ -33,7 +33,9 @@ rendered into the instruction and structured output is left off.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Iterable
+from functools import wraps
 from types import MethodType
 from typing import TYPE_CHECKING, Any, NoReturn
 
@@ -47,7 +49,9 @@ except ImportError as exc:  # the ADK is an optional extra; say which one.
         'pip install "dailies[agent]"'
     ) from exc
 
-from dailies_api.mcp_client import GrafanaMCP
+from dailies_api.mcp_client import GrafanaMCP, GrafanaMCPError
+
+_log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     # ADK's own alias for what ``LlmAgent.tools`` accepts: a ``BaseTool``, a
@@ -252,7 +256,50 @@ def _grafana_tool(name: str, client: GrafanaMCP | _Unconfigured) -> FunctionTool
             f"{name!r} is not a Grafana MCP tool this project wraps. Available: "
             f"{', '.join(sorted(GRAFANA_MCP_TOOLS))}."
         )
-    return FunctionTool(MethodType(getattr(GrafanaMCP, name), client))
+    return FunctionTool(_recoverable(MethodType(getattr(GrafanaMCP, name), client)))
+
+
+def _recoverable(bound: Any) -> Any:
+    """Return a tool that hands a rejected query back to the model instead of raising.
+
+    A query the model wrote and the datasource refused is not a failure of the
+    investigation; it is a correction the model is capable of making. Loki answering
+    ``parse error at line 0, col 52: syntax error: unexpected |=`` says precisely what
+    is wrong, and the agent that wrote the query is the one thing able to act on it.
+
+    Raising throws that away. Measured on 2026-08-29: asked to diagnose SH050, the model
+    wrote one malformed LogQL query, ``ToolCallFailed`` propagated out of the ADK run,
+    and the entire diagnosis came back to the board as a 502 - for a shot whose telemetry
+    was sitting there, complete and readable.
+
+    Only :class:`~dailies_api.mcp_client.GrafanaMCPError` is converted, which is the far
+    side saying "this request was wrong". A transport failure is not caught here and
+    still propagates: the server being unreachable is not something a reworded query
+    fixes, and pretending otherwise would have the agent retry its way through a whole
+    investigation against a Grafana that is simply down, then answer as if it had looked.
+
+    ``functools.wraps`` matters more than it looks. ADK builds the tool's name,
+    description and parameter schema by introspecting this callable, so a wrapper that
+    did not carry the name, docstring and signature through would present the model a
+    nameless tool taking ``*args`` - which is a worse failure than the one being fixed,
+    and a silent one.
+    """
+
+    @wraps(bound)
+    async def tool(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return await bound(*args, **kwargs)
+        except GrafanaMCPError as exc:
+            _log.warning("Tool %s rejected the model's call: %s", bound.__name__, exc)
+            return {
+                "error": str(exc),
+                "hint": (
+                    "The datasource rejected this call. Read the message, correct the "
+                    "query and try again; do not report this as a finding about the shot."
+                ),
+            }
+
+    return tool
 
 
 def _reject_duplicate_tool_names(tools: list[Any]) -> None:
