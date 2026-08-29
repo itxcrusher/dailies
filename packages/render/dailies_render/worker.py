@@ -34,8 +34,12 @@ from dataclasses import dataclass
 from typing import IO, Final
 
 from dailies_telemetry.emitter import RenderTelemetry
+from dailies_telemetry.log_emitter import RenderLogEmitter
 from dailies_telemetry.schema import RenderEvent
+from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+from opentelemetry.sdk._logs import LoggerProvider
+from opentelemetry.sdk._logs.export import SimpleLogRecordProcessor
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
@@ -212,6 +216,25 @@ def build_meter_provider(resource_attributes: Mapping[str, str] | None = None) -
     return MeterProvider(metric_readers=[reader], resource=Resource.create(attributes))
 
 
+def build_logger_provider(resource_attributes: Mapping[str, str] | None = None) -> LoggerProvider:
+    """A provider that ships render-domain conditions to the OTLP endpoint as logs.
+
+    Metrics cannot express "the frame rendered successfully and the output is wrong".
+    That is a log line, and it is the failure class this project exists to catch, so the
+    log pipeline is not optional decoration alongside the metrics one.
+
+    ``SimpleLogRecordProcessor``, not the batch processor, on purpose: a kernel OOM kill
+    SIGKILLs this process, so no ``finally`` and no atexit hook runs and anything still
+    sitting in a batch queue is lost. Shipping each record at call time costs a request
+    per interesting line and guarantees the last line before the kill survives, which is
+    precisely the run whose telemetry matters most.
+    """
+    attributes = {"service.name": SERVICE_NAME, **(resource_attributes or {})}
+    provider = LoggerProvider(resource=Resource.create(attributes))
+    provider.add_log_record_processor(SimpleLogRecordProcessor(OTLPLogExporter()))
+    return provider
+
+
 def _stamp(event: RenderEvent, request: RenderRequest) -> RenderEvent:
     """Return ``event`` with the identity the parser could not know filled in.
 
@@ -242,11 +265,21 @@ def record_stream(
     telemetry: RenderTelemetry,
     *,
     echo: IO[str] | None = None,
+    logs: RenderLogEmitter | None = None,
 ) -> int:
-    """Turn a Blender stdout stream into recorded metrics. Returns the event count."""
+    """Turn a Blender stdout stream into metrics, and its failures into logs.
+
+    Both sinks see every event and each decides what to keep: the metric emitter records
+    durations and memory, the log emitter ships only render-domain conditions an
+    investigator would cite. ``logs`` is optional so the existing tests, and any caller
+    that only wants metrics, keep working unchanged.
+    """
     recorded = 0
     for event in render_from_stream(_tee(lines, echo), shot=request.shot):
-        telemetry.record(_stamp(event, request))
+        stamped = _stamp(event, request)
+        telemetry.record(stamped)
+        if logs is not None:
+            logs.record(stamped)
         recorded += 1
     return recorded
 
@@ -257,6 +290,7 @@ def run_command(
     telemetry: RenderTelemetry,
     *,
     echo: IO[str] | None = None,
+    logs: RenderLogEmitter | None = None,
 ) -> int:
     """Run ``argv``, record its output as it arrives, and return its exit code.
 
@@ -279,13 +313,19 @@ def run_command(
     if process.stdout is None:  # pragma: no cover - PIPE always yields a handle
         raise RuntimeError("subprocess produced no stdout pipe")
     with process.stdout as stream:
-        record_stream(stream, request, telemetry, echo=echo)
+        record_stream(stream, request, telemetry, echo=echo, logs=logs)
     return process.wait()
 
 
-def run(request: RenderRequest, telemetry: RenderTelemetry, *, echo: IO[str] | None = None) -> int:
+def run(
+    request: RenderRequest,
+    telemetry: RenderTelemetry,
+    *,
+    echo: IO[str] | None = None,
+    logs: RenderLogEmitter | None = None,
+) -> int:
     """Render ``request`` and record it. Returns Blender's exit code."""
-    return run_command(build_command(request), request, telemetry, echo=echo)
+    return run_command(build_command(request), request, telemetry, echo=echo, logs=logs)
 
 
 def main(env: Mapping[str, str] | None = None) -> int:
@@ -297,12 +337,18 @@ def main(env: Mapping[str, str] | None = None) -> int:
     """
     request = request_from_env(env)
     provider = build_meter_provider()
+    log_provider = build_logger_provider()
     telemetry = RenderTelemetry(provider)
+    logs = RenderLogEmitter(log_provider)
     try:
-        return run(request, telemetry, echo=sys.stdout)
+        return run(request, telemetry, echo=sys.stdout, logs=logs)
     finally:
+        # Metrics need the flush; logs have already left, one record at a time. Both are
+        # shut down regardless so an ordinary exit does not leave a socket open.
         provider.force_flush()
         provider.shutdown()
+        log_provider.force_flush()
+        log_provider.shutdown()
 
 
 if __name__ == "__main__":  # pragma: no cover - exercised by the container, not pytest
