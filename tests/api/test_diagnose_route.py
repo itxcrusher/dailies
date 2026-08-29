@@ -14,6 +14,7 @@ Nothing here reaches Gemini or Grafana: the diagnoser is injected.
 """
 
 import json
+import logging
 
 import pytest
 from dailies_api.investigation import InvestigationFailed
@@ -142,6 +143,60 @@ def test_an_unusable_answer_is_a_502_rather_than_a_stored_diagnosis():
 
     assert r.status_code == 502
     assert store.get("SH030").diagnosis is None
+
+
+def test_a_transport_failure_is_logged_rather_than_returned_verbatim(caplog):
+    """Two failures cross this branch in production and neither used to reach a log.
+
+    The transport's own message carries the private MCP endpoint URL and up to 500
+    characters of whatever the far side answered - including Cloud Run's raw 401/403
+    page. This route is bound to allUsers, so that text belongs in Cloud Logging where
+    an operator can read it, and not in a body handed to an anonymous browser.
+    """
+    from dailies_api.mcp_transport import MCPProtocolError
+
+    upstream = (
+        "'tools/call' could not reach the MCP server at "
+        "https://dailies-mcp-grafana-000000000000.us-central1.run.app/mcp: "
+        "'<html><title>403 Forbidden</title></html>'"
+    )
+
+    async def unreachable(shot_id):
+        raise MCPProtocolError(upstream)
+
+    store = store_with()
+    client = TestClient(create_app(store, diagnose=unreachable), raise_server_exceptions=False)
+
+    with caplog.at_level(logging.WARNING, logger="dailies_api.main"):
+        r = client.post("/api/shots/SH030/diagnose")
+
+    assert r.status_code == 502
+    detail = r.json()["detail"]
+    assert "SH030" in detail
+    assert "dailies-mcp-grafana" not in detail
+    assert "run.app" not in detail
+    assert "403" not in detail
+    # The operator's copy survives, in full.
+    assert any(upstream in record.getMessage() for record in caplog.records)
+    assert store.get("SH030").diagnosis is None
+
+
+def test_an_unusable_answer_is_logged_as_well_as_returned(caplog):
+    """Without this the response body was the only copy of the cause, and it went to a browser."""
+
+    async def refuses(shot_id):
+        raise InvestigationFailed("the model answered prose, not JSON: 'no idea'")
+
+    client = TestClient(create_app(store_with(), diagnose=refuses), raise_server_exceptions=False)
+
+    with caplog.at_level(logging.WARNING, logger="dailies_api.main"):
+        r = client.post("/api/shots/SH030/diagnose")
+
+    assert r.status_code == 502
+    # The investigator's sentence names the model's answer, not an internal host, so it
+    # is still passed through as written.
+    assert "not JSON" in r.json()["detail"]
+    assert any("SH030" in record.getMessage() for record in caplog.records)
 
 
 def test_the_diagnose_route_is_a_post():

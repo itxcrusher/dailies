@@ -291,6 +291,12 @@ def create_app(
           any of those cases: a diagnosis nobody can check must not reach the board
           wearing the same styling as one that can.
 
+        Every 502 is logged before it is raised, and the transport's variant is logged
+        *instead of* being returned verbatim. This route is bound to ``allUsers``, and a
+        transport error's message carries the private MCP endpoint URL and up to 500
+        characters of the upstream response body; the operator needs those and an
+        anonymous caller does not.
+
         The last of those is caught broadly rather than by type, which is deliberate.
         Driven against a running server on 2026-08-29, a ``ValueError`` out of
         ``google-genai`` reached the caller as a bodyless 500 "Internal Server Error" -
@@ -317,8 +323,26 @@ def create_app(
 
         try:
             diagnosis = await run(shot_id)
-        except (InvestigationFailed, MCPTransportError) as exc:
-            # Already a sentence a human can act on; passed through as written.
+        except MCPTransportError as exc:
+            # Logged, and deliberately not passed through. The transport's own messages
+            # carry the private MCP endpoint URL and up to 500 characters of whatever the
+            # far side answered with, including Cloud Run's raw 401/403 page. That is an
+            # operator's diagnostic, and this route is bound to allUsers, so it goes to
+            # Cloud Logging and the response says only which side failed.
+            _log.warning("Investigating %s could not reach the MCP server: %s", shot_id, exc)
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    f"Investigating {shot_id!r} could not reach the telemetry MCP "
+                    "server. The service log has the cause."
+                ),
+            ) from exc
+        except InvestigationFailed as exc:
+            # The investigator's own sentence, about the model's answer rather than the
+            # transport, so it names no internal host and is passed through as written.
+            # Logged as well as returned: without this the response body was the only
+            # copy of the cause, and it went to a browser and nowhere else.
+            _log.warning("Investigating %s produced no usable diagnosis: %s", shot_id, exc)
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         except Exception as exc:
             # Everything else the investigation can throw. The type is part of the
