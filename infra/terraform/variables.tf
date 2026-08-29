@@ -107,3 +107,24 @@ variable "render_job_memory" {
   EOT
   default     = "8Gi"
 }
+
+variable "mcp_grafana_image" {
+  type        = string
+  description = <<-EOT
+    Fully qualified image for the Grafana MCP server. Mirrored from the upstream
+    `mcp/grafana` into this project's Artifact Registry, because Cloud Run will not pull
+    from Docker Hub.
+  EOT
+}
+
+variable "mcp_grafana_host" {
+  type        = string
+  description = <<-EOT
+    The Cloud Run hostname the MCP service answers on, for its --allowed-hosts allowlist.
+
+    Chicken-and-egg on a first apply: the hostname is not known until the service exists.
+    Apply once with a placeholder, read the URL from the console or `terraform state`,
+    set it here, and apply again. Two applies is the honest cost of the server validating
+    its own Host header, and is preferable to disabling that check with "*".
+  EOT
+}

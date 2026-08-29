@@ -25,3 +25,8 @@ output "artifact_registry_repository" {
   description = "Docker repository path the three images are pushed to."
   value       = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.dailies.repository_id}"
 }
+
+output "mcp_grafana_url" {
+  description = "Internal URL of the Grafana MCP server. Authenticated; not for judges."
+  value       = google_cloud_run_v2_service.mcp_grafana.uri
+}

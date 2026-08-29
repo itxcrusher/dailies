@@ -269,3 +269,78 @@ resource "google_cloud_run_v2_job" "render" {
     google_secret_manager_secret_iam_member.runtime_grafana_otlp,
   ]
 }
+
+# The Grafana MCP server.
+#
+# The track rule is explicit that "the MCP server connection is what's checked", so this
+# is the load-bearing integration rather than a convenience: the investigator reaches
+# Prometheus and Loki through this process, not through the Grafana HTTP API directly.
+#
+# Deliberately NOT public. Unlike the board and its API, nothing outside this project has
+# any reason to reach it, and it holds a Grafana service-account token. Only
+# google_service_account.runtime can invoke it.
+resource "google_cloud_run_v2_service" "mcp_grafana" {
+  name                = "dailies-mcp-grafana"
+  location            = var.region
+  ingress             = "INGRESS_TRAFFIC_ALL"
+  deletion_protection = false
+
+  template {
+    service_account = google_service_account.runtime.email
+
+    scaling {
+      min_instance_count = 0
+      max_instance_count = 2
+    }
+
+    containers {
+      image = var.mcp_grafana_image
+
+      # mcp-grafana validates the Host header on EVERY route and answers an unknown host
+      # with "forbidden: host not allowed". Its default allowlist is loopback only, so a
+      # Cloud Run hostname has to be named here or nothing can reach it. The upstream
+      # README notes "*" is only safe behind a trusted reverse proxy; naming the host
+      # costs nothing and keeps the DNS-rebinding protection doing its job.
+      args = [
+        "-t", "streamable-http",
+        "--allowed-hosts", var.mcp_grafana_host,
+      ]
+
+      ports {
+        container_port = 8000
+      }
+
+      env {
+        name  = "GRAFANA_URL"
+        value = var.grafana_url
+      }
+
+      env {
+        name = "GRAFANA_API_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = data.google_secret_manager_secret.grafana_token.secret_id
+            version = "latest"
+          }
+        }
+      }
+
+      resources {
+        limits = {
+          cpu    = "1"
+          memory = "512Mi"
+        }
+        startup_cpu_boost = true
+      }
+    }
+  }
+}
+
+# Only the runtime service account may invoke it. No allUsers binding here on purpose:
+# this service is not part of what a judge needs to reach, and it fronts a credential.
+resource "google_cloud_run_v2_service_iam_member" "mcp_grafana_runtime" {
+  location = google_cloud_run_v2_service.mcp_grafana.location
+  name     = google_cloud_run_v2_service.mcp_grafana.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.runtime.email}"
+}
