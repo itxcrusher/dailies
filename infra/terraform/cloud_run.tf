@@ -90,9 +90,22 @@ resource "google_cloud_run_v2_service" "api" {
         startup_cpu_boost = true
       }
 
+      # Where the investigator reaches Grafana. The URL is taken from the MCP service's
+      # own attribute rather than typed out: Cloud Run mints the hostname, so a literal
+      # here would be a guess that survives every plan and fails at the first
+      # investigation. Referencing it also makes Terraform order the two services.
+      #
+      # The two datasource UIDs come from the same variables as GRAFANA_PROMETHEUS_UID /
+      # GRAFANA_LOKI_UID above (defaulting to grafanacloud-prom and grafanacloud-logs)
+      # rather than being retyped as literals here. Two spellings of one UID in one
+      # container is a divergence waiting to happen, and the half that is wrong would not
+      # fail: a valid-but-wrong UID answers about a different datasource.
       dynamic "env" {
         for_each = merge(local.grafana_env, local.vertex_env, local.otlp_env, {
-          DAILIES_CORS_ORIGINS = var.cors_origins
+          DAILIES_CORS_ORIGINS   = var.cors_origins
+          DAILIES_MCP_URL        = google_cloud_run_v2_service.mcp_grafana.uri
+          DAILIES_PROMETHEUS_UID = var.prometheus_datasource_uid
+          DAILIES_LOKI_UID       = var.loki_datasource_uid
         })
         content {
           name  = env.key

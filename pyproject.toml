@@ -28,7 +28,11 @@ dev = ["pytest>=8.3", "pytest-asyncio>=0.24", "ruff>=0.7", "httpx>=0.27"]
 # declaration from a bound method's signature, `{name}` state injection into a string
 # instruction). AGENTS.md requires ADK signatures to be verified rather than assumed, and
 # nothing older than 1.20 has been.
-agent = ["google-adk>=1.20", "mcp>=1.2"]
+#
+# httpx is declared here rather than left to arrive under `mcp`: dailies_api.mcp_transport
+# imports it directly to speak Streamable HTTP to the Grafana MCP server, and a direct
+# import on a transitive dependency breaks silently the day the intermediary drops it.
+agent = ["google-adk>=1.20", "mcp>=1.2", "httpx>=0.27"]
 
 [tool.setuptools.packages.find]
 where = ["packages/telemetry", "packages/render", "packages/graph", "apps/api"]

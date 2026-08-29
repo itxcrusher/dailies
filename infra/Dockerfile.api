@@ -34,7 +34,7 @@ RUN pip install --no-cache-dir ".[agent]"
 # install. `pip install .` resolves packages differently from the editable install the
 # tests run under, and a missing module surfaces here as a red build rather than as a
 # Cloud Run revision that never becomes ready.
-RUN python -c "import dailies_api.main, dailies_api.agent, dailies_api.guardian, dailies_graph.model, dailies_graph.forecast, dailies_render.worker, dailies_telemetry.emitter; print('imports ok')"
+RUN python -c "import dailies_api.main, dailies_api.agent, dailies_api.guardian, dailies_api.investigation, dailies_api.mcp_transport, dailies_graph.model, dailies_graph.forecast, dailies_render.worker, dailies_telemetry.emitter; print('imports ok')"
 
 # Not root. Nothing here needs to write to the filesystem at runtime.
 RUN useradd --create-home --uid 1001 dailies
