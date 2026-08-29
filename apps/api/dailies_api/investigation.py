@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Any
 
 from dailies_api.mcp_client import GrafanaMCP, MCPSession
 from dailies_api.mcp_transport import connect
+from dailies_api.shot_source import LOOKBACK
 
 if TYPE_CHECKING:  # pragma: no cover - annotation only, so this module imports without ADK
     from contextlib import AbstractAsyncContextManager
@@ -100,6 +101,16 @@ def investigation_prompt(shot_id: str) -> str:
       has finished, because the series has fallen outside Prometheus staleness. That
       reads exactly like "no such metric", and an investigator that believes it reports a
       shot with no telemetry rather than a shot with a problem.
+
+    The window quoted is :data:`~dailies_api.shot_source.LOOKBACK`, the same constant the
+    board lists shots over, and sharing it is the point rather than its value. The two
+    were separate once: the board listed over 24 hours while this prompt asked for "the
+    last 30 to 60 minutes". Driving the deployed system found the consequence on a render
+    70 minutes old, where the board showed SH040 at 4/4 and the investigator answered,
+    correctly and uselessly, that it could find no telemetry for it. Both components were
+    behaving exactly as written and the pair was still incoherent. A board that lists a
+    shot the agent will always report as having no data is worse than either failure
+    alone, because it reads as a broken render rather than a mismatched query.
     """
     label = shot_label(shot_id)
     return (
@@ -109,8 +120,10 @@ def investigation_prompt(shot_id: str) -> str:
         "Two things about this stack, so you do not waste turns rediscovering them:\n"
         "- The render job has usually finished by the time you are asked. An instant "
         "PromQL query returns nothing for a finished job, because the series has passed "
-        "out of Prometheus staleness. Query a range over the last 30 to 60 minutes "
-        "instead, and do not read an empty instant result as an absent metric.\n"
+        f"out of Prometheus staleness. Query a range from {LOOKBACK} to now instead, "
+        "which is the window the board lists shots over. A shot you are asked about is "
+        "on the board, so its telemetry exists somewhere in that window: if a narrower "
+        "range comes back empty, widen it before concluding there is no data.\n"
         "- A render that exited 0 can still have produced broken frames. The logs are "
         "where that shows up, so read them even when the metrics look healthy.\n\n"
         "Answer with the JSON object described in your instructions and nothing else."
