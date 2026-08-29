@@ -69,6 +69,56 @@ def configure(scene: "bpy.types.Scene") -> None:
     print(f"dailies: cycles CPU, {width}x{height}, {samples} samples")
 
 
+def attach_missing_texture(scene: "bpy.types.Scene") -> None:
+    """Point the cube's material at a texture that is not there, if asked.
+
+    This exists to produce the one failure this project cares most about: a render that
+    **succeeds** while its deliverable is wrong. Blender resolves a missing image to a
+    flat colour, warns on stdout, and exits 0. Infrastructure sees a completed frame; the
+    jacket is grey.
+
+    Metrics cannot express that. There is no counter to increment, no duration out of
+    band, no memory anomaly. The only evidence is the log line, which is why the log
+    pipeline exists and why the investigator queries Loki as well as Prometheus.
+
+    Off unless ``DAILIES_MISSING_TEXTURE`` is set, so the ordinary render stays clean.
+    """
+    if os.environ.get("DAILIES_MISSING_TEXTURE", "").lower() not in ("1", "true", "yes"):
+        return
+
+    path = os.environ.get("DAILIES_MISSING_TEXTURE_PATH", "/assets/jacket_diffuse.exr")
+
+    cube = bpy.data.objects.get("Cube")
+    if cube is None:  # pragma: no cover - only if the startup file changes upstream
+        print("Warning: no Cube to texture; skipping the missing-texture injection")
+        return
+
+    material = bpy.data.materials.new(name="JacketDiffuse")
+    material.use_nodes = True
+    tree = material.node_tree
+    image_node = tree.nodes.new("ShaderNodeTexImage")
+
+    # bpy.data.images.load() on an absent path raises rather than warning, and a raise
+    # would abort the render, which is the opposite of what this is for. Creating the
+    # datablock and then pointing its filepath at nothing reproduces the real situation:
+    # a scene that references an asset the farm cannot find.
+    image = bpy.data.images.new(name="jacket_diffuse", width=8, height=8)
+    image.source = "FILE"
+    image.filepath = path
+    image_node.image = image
+
+    principled = next((n for n in tree.nodes if n.type == "BSDF_PRINCIPLED"), None)
+    if principled is not None:
+        tree.links.new(image_node.outputs["Color"], principled.inputs["Base Color"])
+
+    cube.data.materials.clear()
+    cube.data.materials.append(material)
+
+    # Printed in Blender's own phrasing on purpose: the parser matches what Blender
+    # emits, and a bespoke message here would be a line only this scene can produce.
+    print(f"Warning: Unable to open file '{path}'")
+
+
 def animate(scene: "bpy.types.Scene") -> None:
     """Give the cube a rotation so consecutive frames are not identical images.
 
@@ -89,3 +139,4 @@ def animate(scene: "bpy.types.Scene") -> None:
 
 configure(bpy.context.scene)
 animate(bpy.context.scene)
+attach_missing_texture(bpy.context.scene)
