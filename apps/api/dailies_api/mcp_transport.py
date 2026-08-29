@@ -47,6 +47,7 @@ import asyncio
 import base64
 import binascii
 import json
+import logging
 import time
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
@@ -59,7 +60,9 @@ import httpx
 __all__ = [
     "ID_TOKEN_ENV",
     "MCP_ENDPOINT_PATH",
+    "METADATA_ATTEMPTS",
     "METADATA_IDENTITY_URL",
+    "METADATA_RETRY_DELAY_SECONDS",
     "PROTOCOL_VERSION",
     "ContentBlock",
     "IdentityTokenSource",
@@ -104,7 +107,23 @@ REFRESH_MARGIN_SECONDS = 300.0
 #: request that 401s halfway through an investigation.
 FALLBACK_TTL_SECONDS = 300.0
 
+#: How many times the metadata server's identity endpoint is asked when it answers 5xx or
+#: times out. google-auth's own ``_metadata.get`` retries this endpoint for the same
+#: reason: a container that has only just started can get a 500 or a timeout from a
+#: metadata server that answers fine a moment later, and a startup-time transient must not
+#: become an investigation that reports the service as unreachable.
+METADATA_ATTEMPTS = 3
+
+#: How long to wait between those attempts.
+METADATA_RETRY_DELAY_SECONDS = 0.25
+
 _CLIENT_INFO = {"name": "dailies", "version": "0.1.0"}
+
+#: Named after the module, so a Cloud Run log line says which surface failed. Everything
+#: this module discards from a failed token mint is written here first: inside the
+#: container the metadata server is the *only* token path, and its failures used to leave
+#: no trace at all.
+_log = logging.getLogger(__name__)
 
 
 class MCPTransportError(RuntimeError):
@@ -241,11 +260,20 @@ class IdentityTokenSource:
     1. **The metadata server.** Inside Cloud Run this is the only thing that can mint a
        token for an arbitrary audience, and it needs no configuration at all.
     2. **``GOOGLE_ID_TOKEN``.** Outside Cloud Run the metadata hostname does not resolve,
-       which surfaces as a connection error rather than a 404. That verdict is remembered
-       so a laptop run does not pay for a failed DNS lookup on every token refresh; the
-       answer cannot change without the process moving hosts.
-    3. **Neither.** Raise :class:`IdentityTokenUnavailable` naming both, rather than
-       sending an unauthenticated request.
+       which surfaces as a connection error rather than a 404. *That* verdict, and only
+       that one, is remembered, so a laptop run does not pay for a failed DNS lookup on
+       every token refresh; it cannot change without the process moving hosts.
+    3. **Neither.** Raise :class:`IdentityTokenUnavailable` saying what the metadata
+       server actually did, rather than sending an unauthenticated request.
+
+    A timeout and a non-200 are deliberately *not* that verdict, and the difference is
+    the whole point of the split. Inside the container the metadata path is the only one
+    that can produce a token, so treating a slow moment or a 500 as "not on Cloud Run"
+    both latches the wrong answer permanently and prints a sentence that is the exact
+    opposite of the truth to the only person who can fix it. A 5xx and a timeout are
+    retried :data:`METADATA_ATTEMPTS` times; a 4xx is not, because a 403 or a 404 is a
+    decision about this service account or this audience and repeating it just repeats it.
+    Whatever the last failure was, it is logged and carried into the raised message.
 
     The token is cached until :data:`REFRESH_MARGIN_SECONDS` before its ``exp``, so one
     investigation's worth of tool calls mints once. The fill is serialised under a lock
@@ -262,6 +290,8 @@ class IdentityTokenSource:
         now: Callable[[], float] = time.time,
         refresh_margin_seconds: float = REFRESH_MARGIN_SECONDS,
         timeout_seconds: float = 5.0,
+        attempts: int = METADATA_ATTEMPTS,
+        retry_delay_seconds: float = METADATA_RETRY_DELAY_SECONDS,
     ) -> None:
         self.audience = audience
         self._client = client
@@ -269,9 +299,14 @@ class IdentityTokenSource:
         self._now = now
         self._margin = refresh_margin_seconds
         self._timeout = timeout_seconds
+        self._attempts = max(1, attempts)
+        self._retry_delay = retry_delay_seconds
         self._token: str | None = None
         self._expires_at: float = 0.0
         self._metadata_available = True
+        #: What the metadata server last did wrong, as a sentence. The message raised
+        #: when nothing can mint a token is built from this rather than assuming.
+        self._metadata_error: str | None = None
         self._lock = asyncio.Lock()
 
     async def token(self) -> str:
@@ -299,31 +334,94 @@ class IdentityTokenSource:
         if token is not None:
             return token
         raise IdentityTokenUnavailable(
-            "No Cloud Run ID token could be obtained for audience "
-            f"{self.audience!r}. The metadata server at {METADATA_IDENTITY_URL} is not "
-            f"reachable (so this is not running on Cloud Run) and {ID_TOKEN_ENV} is not "
-            "set. Set it to a token for that audience, for example: gcloud auth "
-            "print-identity-token --impersonate-service-account=<runtime sa> "
+            f"No Cloud Run ID token could be obtained for audience {self.audience!r}. "
+            f"{self._metadata_verdict()} {ID_TOKEN_ENV} is not set either. Set it to a "
+            "token for that audience, for example: gcloud auth print-identity-token "
+            "--impersonate-service-account=<runtime sa> "
             f"--audiences={self.audience}"
         )
 
+    def _metadata_verdict(self) -> str:
+        """One sentence about what the metadata server did, never an assumption.
+
+        The old fixed text claimed the host was unreachable "so this is not running on
+        Cloud Run" whatever had actually happened, which inside the container is both
+        false and the only diagnostic an operator gets.
+        """
+        if self._metadata_error is not None:
+            return self._metadata_error
+        return f"The metadata server at {METADATA_IDENTITY_URL} was not asked."
+
     async def _from_metadata(self) -> str | None:
-        try:
-            response = await self._client.get(
-                METADATA_IDENTITY_URL,
-                params={"audience": self.audience, "format": "full"},
-                headers={"Metadata-Flavor": "Google"},
-                timeout=self._timeout,
-            )
-        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout):
-            # Not on Cloud Run. Remembered so the next refresh does not repeat the wait.
-            self._metadata_available = False
-            return None
-        if response.status_code != 200:
-            # Reachable but refusing (no default service account, audience rejected).
-            # Not remembered as unavailable: this one can genuinely change.
-            return None
-        return response.text.strip() or None
+        """A freshly minted token, or ``None`` with ``_metadata_error`` saying why."""
+        last_error: str | None = None
+        for attempt in range(1, self._attempts + 1):
+            retryable = True
+            try:
+                response = await self._client.get(
+                    METADATA_IDENTITY_URL,
+                    params={"audience": self.audience, "format": "full"},
+                    headers={"Metadata-Flavor": "Google"},
+                    timeout=self._timeout,
+                )
+            except httpx.ConnectError as exc:
+                # The one genuine verdict about the host: the metadata name does not
+                # resolve, or nothing is listening on it, so this process is not on
+                # Cloud Run. Latched, because that cannot change under a running process.
+                self._metadata_available = False
+                self._metadata_error = (
+                    f"The metadata server at {METADATA_IDENTITY_URL} is not reachable "
+                    f"(so this is not running on Cloud Run): {exc!r}."
+                )
+                _log.debug(
+                    "No metadata server for audience %s; falling back to %s: %r",
+                    self.audience,
+                    ID_TOKEN_ENV,
+                    exc,
+                )
+                return None
+            except httpx.TimeoutException as exc:
+                # NOT latched. A timeout is a transient, not a statement about the host:
+                # a container under startup contention can time out against a metadata
+                # server that answers a second later, and remembering it as "not on
+                # Cloud Run" would leave the only working token path switched off for
+                # the life of the process.
+                last_error = (
+                    f"The metadata server at {METADATA_IDENTITY_URL} timed out after "
+                    f"{self._timeout}s ({type(exc).__name__})."
+                )
+            else:
+                if response.status_code == 200:
+                    token = response.text.strip()
+                    if token:
+                        return token
+                    last_error = (
+                        f"The metadata server at {METADATA_IDENTITY_URL} answered 200 "
+                        "with an empty body."
+                    )
+                else:
+                    last_error = (
+                        f"The metadata server at {METADATA_IDENTITY_URL} answered "
+                        f"{response.status_code} for audience {self.audience!r}: "
+                        f"{response.text[:200]!r}."
+                    )
+                    # A 4xx is a decision about this service account or this audience.
+                    # Retrying repeats it; only a 5xx is worth asking again.
+                    retryable = response.status_code >= 500
+            if retryable and attempt < self._attempts:
+                _log.warning(
+                    "Cloud Run ID token mint failed, retrying (attempt %d/%d): %s",
+                    attempt,
+                    self._attempts,
+                    last_error,
+                )
+                if self._retry_delay > 0:
+                    await asyncio.sleep(self._retry_delay)
+                continue
+            _log.warning("Cloud Run ID token mint failed: %s", last_error)
+            break
+        self._metadata_error = last_error
+        return None
 
     def _from_env(self) -> str | None:
         import os
@@ -342,6 +440,20 @@ def _endpoint(url: str) -> str:
     if not path.endswith(MCP_ENDPOINT_PATH):
         path = f"{path}{MCP_ENDPOINT_PATH}"
     return urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment))
+
+
+def _audience(url: str) -> str:
+    """The Cloud Run *service* origin to mint an ID token for.
+
+    Not the same string as :func:`_endpoint`, and the difference is load bearing. Cloud
+    Run validates an ID token's ``aud`` against the service URL with no path on it, so a
+    token minted for ``https://host/mcp`` is rejected with the same bare 401 as no token
+    at all. :func:`connect` accepts a URL that already names ``/mcp``, so handing it
+    through unchanged set that trap for whoever pastes the endpoint form into
+    ``DAILIES_MCP_URL``.
+    """
+    parts = urlsplit(url.rstrip("/"))
+    return urlunsplit((parts.scheme, parts.netloc, "", "", ""))
 
 
 def _sse_payloads(body: str) -> list[Any]:
@@ -610,14 +722,17 @@ async def connect(
         client: An HTTP client to use. Omit it and one is created and closed with the
             session; pass one to share a connection pool, or to test without a network.
         token_source: Where the bearer token comes from. Omit it for the Cloud Run
-            identity token minted for ``url``.
+            identity token minted for ``url``'s service origin - the audience Cloud Run
+            checks against, which is the URL with no ``/mcp`` path on it.
         env: Environment for the default token source's ``GOOGLE_ID_TOKEN`` fallback.
             Defaults to the process environment.
     """
     owns_client = client is None
     http = httpx.AsyncClient() if client is None else client
     tokens = (
-        IdentityTokenSource(url, client=http, env=env) if token_source is None else token_source
+        IdentityTokenSource(_audience(url), client=http, env=env)
+        if token_source is None
+        else token_source
     )
     session = StreamableHTTPSession(url, client=http, token_source=tokens, owns_client=owns_client)
     try:

@@ -16,12 +16,15 @@ when it is wrong:
 
 import base64
 import json
+import logging
 
 import httpx
 import pytest
 from dailies_api.mcp_client import GrafanaMCP
 from dailies_api.mcp_transport import (
+    FALLBACK_TTL_SECONDS,
     ID_TOKEN_ENV,
+    METADATA_ATTEMPTS,
     IdentityTokenSource,
     IdentityTokenUnavailable,
     MCPProtocolError,
@@ -29,7 +32,9 @@ from dailies_api.mcp_transport import (
     connect,
 )
 
-MCP_URL = "https://dailies-mcp-grafana-362568387922.us-central1.run.app"
+# A reserved-TLD host, as in tests/api/test_diagnose_route.py. Nothing here resolves
+# anything, and the live service URL carries the GCP project number.
+MCP_URL = "https://dailies-mcp-grafana.example.invalid"
 SESSION_ID = "5f3b0c1e-session"
 
 
@@ -290,12 +295,37 @@ class MetadataStub:
         return httpx.Response(200, text=self.tokens.pop(0) if self.tokens else jwt(10_000))
 
 
-def token_source(stub, *, env=None, now=None):
+class ScriptedMetadata:
+    """A metadata server that answers a scripted sequence, so the failure paths can run.
+
+    ``MetadataStub`` above only ever answers 200 or refuses to resolve, which left the
+    two branches that actually happen inside a container - a non-200 and a timeout -
+    with no coverage at all. Each entry here is an ``httpx.Response`` to return or an
+    exception to raise; running past the end repeats the last entry, so a retry test
+    does not have to know how many attempts the source makes.
+    """
+
+    def __init__(self, *script):
+        self.script = list(script)
+        self.requests = []
+
+    def handler(self, request):
+        self.requests.append(request)
+        entry = self.script[min(len(self.requests) - 1, len(self.script) - 1)]
+        if isinstance(entry, BaseException):
+            raise entry
+        return entry
+
+
+def token_source(stub, *, env=None, now=None, **kwargs):
     return IdentityTokenSource(
         MCP_URL,
         client=httpx.AsyncClient(transport=httpx.MockTransport(stub.handler)),
         env={} if env is None else env,
         now=(lambda: 0.0) if now is None else now,
+        # Zero, so a retry test does not spend the real backoff.
+        retry_delay_seconds=0.0,
+        **kwargs,
     )
 
 
@@ -339,6 +369,137 @@ async def test_no_identity_source_at_all_says_so_instead_of_401ing():
     message = str(raised.value)
     assert ID_TOKEN_ENV in message
     assert "metadata" in message.lower()
+
+
+# -- the metadata server's failure paths -----------------------------------------
+#
+# The metadata path is the ONLY one that can mint a token inside Cloud Run, and until
+# these tests existed its two in-container failure modes - a non-200 and a timeout - had
+# no coverage: the stub above only answers 200 or refuses to resolve. What shipped was a
+# discarded status code, no log line at all, and a fixed message telling the operator the
+# process "is not running on Cloud Run" while it was running on Cloud Run.
+
+
+async def test_a_refusing_metadata_server_reports_what_it_actually_answered():
+    stub = ScriptedMetadata(httpx.Response(403, text="Forbidden: no default service account"))
+
+    with pytest.raises(IdentityTokenUnavailable) as raised:
+        await token_source(stub, env={}).token()
+
+    message = str(raised.value)
+    assert "403" in message
+    assert "no default service account" in message
+    # The old fixed sentence, and inside the container it is the opposite of the truth.
+    assert "not running on Cloud Run" not in message
+    # A 4xx is a decision about this service account or audience, not a transient.
+    assert len(stub.requests) == 1
+
+
+async def test_a_refusing_metadata_server_is_logged(caplog):
+    """The response body reaches one caller; the log is where an operator can find it."""
+    stub = ScriptedMetadata(httpx.Response(403, text="Forbidden"))
+
+    with (
+        caplog.at_level(logging.WARNING, logger="dailies_api.mcp_transport"),
+        pytest.raises(IdentityTokenUnavailable),
+    ):
+        await token_source(stub, env={}).token()
+
+    assert any("403" in record.getMessage() for record in caplog.records)
+
+
+async def test_a_5xx_from_the_metadata_server_is_retried():
+    stub = ScriptedMetadata(httpx.Response(500, text="internal error"))
+
+    with pytest.raises(IdentityTokenUnavailable) as raised:
+        await token_source(stub, env={}).token()
+
+    assert len(stub.requests) == METADATA_ATTEMPTS
+    assert "500" in str(raised.value)
+
+
+async def test_a_startup_transient_resolves_on_the_retry():
+    """A container that has only just started can get a 5xx from a healthy metadata server."""
+    good = jwt(10_000)
+    stub = ScriptedMetadata(httpx.Response(503, text="starting up"), httpx.Response(200, text=good))
+
+    assert await token_source(stub, env={}).token() == good
+    assert len(stub.requests) == 2
+
+
+async def test_a_timeout_is_retried_rather_than_treated_as_a_verdict():
+    good = jwt(10_000)
+    stub = ScriptedMetadata(httpx.ReadTimeout("slow"), httpx.Response(200, text=good))
+
+    assert await token_source(stub, env={}).token() == good
+    assert len(stub.requests) == 2
+
+
+async def test_a_timeout_does_not_switch_the_metadata_server_off_for_good():
+    """Latching on a timeout would leave a container with no token path at all.
+
+    A timeout says the request was slow, not that the host has no metadata server. The
+    verdict has to stay revisable, or one slow moment during startup costs every
+    subsequent refresh for the life of the process.
+    """
+    good = jwt(10_000)
+    slow = httpx.ReadTimeout("slow")
+    stub = ScriptedMetadata(slow, slow, slow, httpx.Response(200, text=good))
+    clock = {"now": 0.0}
+    source = token_source(stub, env={ID_TOKEN_ENV: "token-from-the-env"}, now=lambda: clock["now"])
+
+    # This run exhausts its attempts and falls back to the env var.
+    assert await source.token() == "token-from-the-env"
+    assert len(stub.requests) == METADATA_ATTEMPTS
+
+    # The env token carries no readable exp, so it ages out on the fallback TTL.
+    clock["now"] = FALLBACK_TTL_SECONDS + 1
+    assert await source.token() == good
+    assert len(stub.requests) == METADATA_ATTEMPTS + 1
+
+
+async def test_a_connect_error_is_a_verdict_and_is_not_asked_again():
+    """The contrast: a name that does not resolve cannot start to mid-process."""
+    stub = ScriptedMetadata(httpx.ConnectError("no metadata server"))
+    clock = {"now": 0.0}
+    source = token_source(stub, env={ID_TOKEN_ENV: "token-from-the-env"}, now=lambda: clock["now"])
+
+    assert await source.token() == "token-from-the-env"
+    clock["now"] = FALLBACK_TTL_SECONDS + 1
+    assert await source.token() == "token-from-the-env"
+
+    assert len(stub.requests) == 1
+
+
+async def test_a_connect_error_still_says_this_is_not_cloud_run():
+    stub = ScriptedMetadata(httpx.ConnectError("no metadata server"))
+
+    with pytest.raises(IdentityTokenUnavailable) as raised:
+        await token_source(stub, env={}).token()
+
+    assert "not running on Cloud Run" in str(raised.value)
+
+
+async def test_the_token_audience_drops_an_endpoint_path_from_the_url():
+    """Cloud Run checks `aud` against the service URL, which has no `/mcp` on it.
+
+    `connect` documents that a URL already naming the endpoint is accepted, so minting
+    against the raw string produced a token for `https://host/mcp` - rejected with the
+    same bare 401 as no token at all, which is the failure this module exists to avoid.
+    """
+    recorder = Recorder()
+    stub = ScriptedMetadata(httpx.Response(200, text=jwt(10_000)))
+
+    def handler(request):
+        if request.url.host == "metadata.google.internal":
+            return stub.handler(request)
+        return recorder.handler(request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    async with connect(f"{MCP_URL}/mcp", client=client) as session:
+        assert session.url == f"{MCP_URL}/mcp"
+
+    assert stub.requests[0].url.params["audience"] == MCP_URL
 
 
 async def test_an_unauthenticated_request_is_never_sent():
