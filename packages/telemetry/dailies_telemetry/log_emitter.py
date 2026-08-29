@@ -24,10 +24,10 @@ one line an investigator needs. Frame starts and completions are dropped here on
 
 from __future__ import annotations
 
+import logging
 from typing import Final
 
-from opentelemetry._logs import SeverityNumber
-from opentelemetry.sdk._logs import LoggerProvider
+from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 
 from .schema import EventKind, RenderEvent
 
@@ -52,25 +52,44 @@ LOGGED_KINDS: Final[frozenset[EventKind]] = frozenset(
 #: The render *succeeded*; the deliverable is wrong. An investigator filtering for
 #: severity>=ERROR would miss the defect this project exists to catch, so the two must be
 #: separable by a query rather than only by reading the message text.
-_SEVERITY: Final[dict[EventKind, SeverityNumber]] = {
-    EventKind.ASSET_MISSING: SeverityNumber.WARN,
-    EventKind.OOM: SeverityNumber.ERROR,
-    EventKind.ENGINE_CRASH: SeverityNumber.ERROR,
-    EventKind.FRAME_FAILED: SeverityNumber.ERROR,
+_LEVEL: Final[dict[EventKind, int]] = {
+    EventKind.ASSET_MISSING: logging.WARNING,
+    EventKind.OOM: logging.ERROR,
+    EventKind.ENGINE_CRASH: logging.ERROR,
+    EventKind.FRAME_FAILED: logging.ERROR,
 }
 
 
 class RenderLogEmitter:
     """Emit render-domain conditions as OTLP log records.
 
-    The provider is injected rather than built here, so tests drive it with an in-memory
-    exporter and no network, and the deployment configures the endpoint and credential
-    through the SDK's own ``OTEL_EXPORTER_OTLP_*`` variables.
+    Records go out through :class:`~opentelemetry.sdk._logs.LoggingHandler` attached to a
+    private stdlib logger, rather than by constructing ``LogRecord`` directly.
+
+    That is not stylistic. An earlier version built ``LogRecord`` itself and died in the
+    container with ``ImportError: cannot import name 'LogRecord' from
+    'opentelemetry.sdk._logs'``, while passing locally, because the dependency was pinned
+    ``>=1.30`` and the container resolved a newer SDK that had moved the class. The whole
+    render then exited 1. ``LoggingHandler`` is the documented integration point and has
+    not moved, so the version drift that broke the render cannot recur here.
+
+    The logger is private (``propagate = False``, a unique name) so these records never
+    reach the root logger and appear twice in Cloud Logging alongside Blender's own
+    stdout, which the container already captures.
     """
 
     def __init__(self, logger_provider: LoggerProvider) -> None:
         self._provider = logger_provider
-        self._logger = logger_provider.get_logger("dailies.render")
+        # A per-instance logger name, not a shared one. logging.getLogger is a singleton
+        # registry: two emitters over two providers asking for the same name get the same
+        # logger, and whichever attached its handler first captures both their records.
+        # That is not hypothetical - it silently sent one provider's records to another's
+        # exporter until a test caught it.
+        self._log = logging.getLogger(f"dailies.render.events.{id(self):x}")
+        self._log.setLevel(logging.WARNING)
+        self._log.propagate = False
+        self._log.handlers.clear()
+        self._log.addHandler(LoggingHandler(level=logging.WARNING, logger_provider=logger_provider))
 
     def record(self, event: RenderEvent) -> None:
         """Ship ``event`` if it is a condition an investigator would cite."""
@@ -82,40 +101,20 @@ class RenderLogEmitter:
         # quote in its evidence.
         body = event.message or f"render event: {event.kind.value}"
 
-        self._logger.emit(
-            self._build(
-                body=body,
-                severity=_SEVERITY[event.kind],
-                attributes={
-                    "event_kind": event.kind.value,
-                    "shot": event.shot,
-                    "frame": event.frame,
-                    "project": event.project,
-                    "sequence": event.sequence,
-                    "render_job": event.render_job,
-                    "worker": event.worker,
-                },
-            )
+        self._log.log(
+            _LEVEL[event.kind],
+            body,
+            extra={
+                "event_kind": event.kind.value,
+                "shot": event.shot,
+                "frame": event.frame,
+                "project": event.project,
+                "sequence": event.sequence,
+                "render_job": event.render_job,
+                "worker": event.worker,
+            },
         )
 
     def flush(self) -> None:
         """Force any pending records out. A no-op under the simple processor."""
         self._provider.force_flush()
-
-    @staticmethod
-    def _build(*, body: str, severity: SeverityNumber, attributes: dict[str, object]):
-        """Construct a LogRecord across SDK versions.
-
-        The SDK moved ``LogRecord`` between ``opentelemetry.sdk._logs`` and the private
-        ``_logs._internal`` module, and the constructor's accepted keywords have changed.
-        Importing at call time and passing only the stable keywords keeps this working
-        across the range our pin allows, rather than breaking on a patch upgrade.
-        """
-        from opentelemetry.sdk._logs import LogRecord
-
-        return LogRecord(
-            body=body,
-            severity_number=severity,
-            severity_text=severity.name,
-            attributes=attributes,
-        )

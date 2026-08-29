@@ -13,8 +13,8 @@ dependencies = [
   # >=1.30, not 1.27: `create_histogram` only grew the
   # `explicit_bucket_boundaries_advisory` keyword in 1.30, and the emitter passes it.
   # On 1.27 a clean minimum-version install would TypeError at instrument creation.
-  "opentelemetry-sdk>=1.30",
-  "opentelemetry-exporter-otlp-proto-http>=1.30",
+  "opentelemetry-sdk>=1.30,<2",
+  "opentelemetry-exporter-otlp-proto-http>=1.30,<2",
   "pydantic>=2.9",
 ]
 
