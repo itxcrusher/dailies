@@ -26,8 +26,10 @@ through ``app.state.shots``::
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any, Protocol
 
@@ -169,6 +171,21 @@ def build_shot_source(env: Mapping[str, str] | None = None) -> ShotSource | None
     return _PerRequest()
 
 
+#: How long a stored diagnosis is served instead of running a new investigation.
+#:
+#: The diagnose route is bound to ``allUsers`` because judges must reach it, every press
+#: costs a Vertex call plus several Grafana queries, and shot ids are enumerable from the
+#: public list route. Without this, anyone who can read the board can spend the project's
+#: credits in a loop.
+#:
+#: Five minutes is chosen against the render, not the wallet: frames land on the order of
+#: seconds to minutes, so a diagnosis younger than this is describing substantially the
+#: same state and re-running it buys a differently-worded answer to the same question. It
+#: is also the better demo behaviour, since pressing twice should show the answer at once
+#: rather than spending a minute recomputing it.
+DIAGNOSIS_COOLDOWN_SECONDS = 300
+
+
 def cors_origins(env: Mapping[str, str] | None = None) -> list[str]:
     """The browser origins allowed to read the board.
 
@@ -241,6 +258,10 @@ def create_app(
     # building the default here rather than per request means an unconfigured deployment
     # does not re-read the environment on every page load to reach the same conclusion.
     source = build_shot_source() if shot_source is None else shot_source
+    # Per-app, never module-global, for the same reason the store is: two apps in one
+    # process must not share a cooldown clock or a lock table.
+    diagnosed_at: dict[str, float] = {}
+    in_flight: dict[str, asyncio.Lock] = {}
 
     app = FastAPI(
         title="Dailies",
@@ -421,44 +442,70 @@ def create_app(
         from dailies_api.investigation import InvestigationFailed
         from dailies_api.mcp_transport import MCPTransportError
 
-        try:
-            diagnosis = await run(shot_id)
-        except MCPTransportError as exc:
-            # Logged, and deliberately not passed through. The transport's own messages
-            # carry the private MCP endpoint URL and up to 500 characters of whatever the
-            # far side answered with, including Cloud Run's raw 401/403 page. That is an
-            # operator's diagnostic, and this route is bound to allUsers, so it goes to
-            # Cloud Logging and the response says only which side failed.
-            _log.warning("Investigating %s could not reach the MCP server: %s", shot_id, exc)
-            raise HTTPException(
-                status_code=502,
-                detail=(
-                    f"Investigating {shot_id!r} could not reach the telemetry MCP "
-                    "server. The service log has the cause."
-                ),
-            ) from exc
-        except InvestigationFailed as exc:
-            # The investigator's own sentence, about the model's answer rather than the
-            # transport, so it names no internal host and is passed through as written.
-            # Logged as well as returned: without this the response body was the only
-            # copy of the cause, and it went to a browser and nowhere else.
-            _log.warning("Investigating %s produced no usable diagnosis: %s", shot_id, exc)
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
-        except Exception as exc:
-            # Everything else the investigation can throw. The type is part of the
-            # message because an untyped failure's class is usually the fastest route
-            # to its cause, and it is the one thing str(exc) leaves out.
-            _log.exception("Investigating %s failed", shot_id)
-            raise HTTPException(
-                status_code=502,
-                detail=(f"Investigating {shot_id!r} failed: {type(exc).__name__}: {exc}"),
-            ) from exc
+        # One lock per shot, so a slow investigation of SH030 never delays SH040. The
+        # lock is what the cooldown alone cannot give: a cooldown keyed on a stored
+        # answer does nothing until the first one lands, and an investigation takes
+        # minutes, so ten clicks in that window would be ten concurrent Vertex calls.
+        lock = in_flight.setdefault(shot_id, asyncio.Lock())
+        async with lock:
+            # Re-checked inside the lock, not only outside it. A request that queued
+            # behind a running investigation arrives here with the answer already
+            # stored, and re-running would defeat the guard it just waited on.
+            held = shots.get(shot_id)
+            if held is not None and held.diagnosis is not None:
+                age = time.monotonic() - diagnosed_at.get(shot_id, 0.0)
+                if age < DIAGNOSIS_COOLDOWN_SECONDS:
+                    _log.info(
+                        "Serving the diagnosis of %s stored %.0fs ago; cooldown is %ds",
+                        shot_id,
+                        age,
+                        DIAGNOSIS_COOLDOWN_SECONDS,
+                    )
+                    return held
 
-        # Re-read rather than reusing the shot fetched above: an investigation takes
-        # minutes, and frames land during it. Writing back the copy taken at the start
-        # would roll frames_done and risk back to where they were when the button was
-        # pressed.
-        current = shots.get(shot_id) or shot
-        return shots.upsert(current.model_copy(update={"diagnosis": diagnosis}))
+            try:
+                diagnosis = await run(shot_id)
+            except MCPTransportError as exc:
+                # Logged, and deliberately not passed through. The transport's own messages
+                # carry the private MCP endpoint URL and up to 500 characters of whatever the
+                # far side answered with, including Cloud Run's raw 401/403 page. That is an
+                # operator's diagnostic, and this route is bound to allUsers, so it goes to
+                # Cloud Logging and the response says only which side failed.
+                _log.warning("Investigating %s could not reach the MCP server: %s", shot_id, exc)
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        f"Investigating {shot_id!r} could not reach the telemetry MCP "
+                        "server. The service log has the cause."
+                    ),
+                ) from exc
+            except InvestigationFailed as exc:
+                # The investigator's own sentence, about the model's answer rather than the
+                # transport, so it names no internal host and is passed through as written.
+                # Logged as well as returned: without this the response body was the only
+                # copy of the cause, and it went to a browser and nowhere else.
+                _log.warning("Investigating %s produced no usable diagnosis: %s", shot_id, exc)
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+            except Exception as exc:
+                # Everything else the investigation can throw. The type is part of the
+                # message because an untyped failure's class is usually the fastest route
+                # to its cause, and it is the one thing str(exc) leaves out.
+                _log.exception("Investigating %s failed", shot_id)
+                raise HTTPException(
+                    status_code=502,
+                    detail=(f"Investigating {shot_id!r} failed: {type(exc).__name__}: {exc}"),
+                ) from exc
+
+            # Re-read rather than reusing the shot fetched above: an investigation takes
+            # minutes, and frames land during it. Writing back the copy taken at the start
+            # would roll frames_done and risk back to where they were when the button was
+            # pressed.
+            current = shots.get(shot_id) or shot
+            stored = shots.upsert(current.model_copy(update={"diagnosis": diagnosis}))
+            # Stamped only on success. A failed investigation must stay retryable at
+            # once: a 502 that also started a five-minute cooldown would leave a
+            # transient Grafana outage looking like a permanently broken button.
+            diagnosed_at[shot_id] = time.monotonic()
+            return stored
 
     return app

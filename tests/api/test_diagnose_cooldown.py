@@ -1,0 +1,100 @@
+"""The diagnose route must not be a free money tap.
+
+POST /api/shots/{id}/diagnose is bound to allUsers because judges have to reach it, and
+every press costs a Vertex Gemini call plus several Grafana queries. Shot ids are
+enumerable from the public GET /api/shots, so anyone who can read the board can spend
+the project's credits in a loop, bounded only by max_instance_count.
+
+A cooldown is also the better demo behaviour: pressing the button twice should show the
+answer instantly, not spend a minute recomputing one that has not changed.
+"""
+
+import asyncio
+
+import pytest
+from dailies_api.main import DIAGNOSIS_COOLDOWN_SECONDS, create_app
+from dailies_api.state import Shot, ShotStore
+from fastapi.testclient import TestClient
+
+DIAGNOSIS = {
+    "shot": "SH030",
+    "cause": "a texture failed to resolve",
+    "evidence": [{"query": '{shot="SH030"}', "finding": "Unable to open file"}],
+    "confidence": "high",
+}
+
+
+def store_with(shot_id: str = "dailies:SEQ01:SH030:job-7") -> ShotStore:
+    store = ShotStore()
+    store.upsert(Shot(id=shot_id, frames_total=48, frames_done=12))
+    return store
+
+
+def counting_diagnoser(calls: list[str]):
+    async def diagnose(shot_id: str) -> dict:
+        calls.append(shot_id)
+        return DIAGNOSIS
+
+    return diagnose
+
+
+def test_a_second_press_inside_the_cooldown_reuses_the_stored_answer():
+    calls: list[str] = []
+    client = TestClient(create_app(store_with(), diagnose=counting_diagnoser(calls)))
+    url = "/api/shots/dailies:SEQ01:SH030:job-7/diagnose"
+
+    first = client.post(url)
+    second = client.post(url)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["diagnosis"] == DIAGNOSIS
+    assert calls == ["dailies:SEQ01:SH030:job-7"], "the investigator must run exactly once"
+
+
+def test_the_cooldown_is_per_shot_not_global():
+    """One shot's cooldown must never suppress a different shot's first diagnosis."""
+    store = store_with()
+    store.upsert(Shot(id="dailies:SEQ01:SH040:job-8", frames_total=4, frames_done=4))
+    calls: list[str] = []
+    client = TestClient(create_app(store, diagnose=counting_diagnoser(calls)))
+
+    client.post("/api/shots/dailies:SEQ01:SH030:job-7/diagnose")
+    client.post("/api/shots/dailies:SEQ01:SH040:job-8/diagnose")
+
+    assert len(calls) == 2
+
+
+def test_the_cooldown_is_long_enough_to_be_worth_having():
+    assert DIAGNOSIS_COOLDOWN_SECONDS >= 30
+
+
+@pytest.mark.asyncio
+async def test_two_simultaneous_presses_run_one_investigation():
+    """The in-flight guard, which the cooldown alone does not give.
+
+    A cooldown keyed on a stored diagnosis does nothing before the first one finishes,
+    and an investigation takes minutes. Without a guard, ten clicks during that window
+    are ten concurrent Vertex calls.
+    """
+    started = 0
+    release = asyncio.Event()
+
+    async def slow(shot_id: str) -> dict:
+        nonlocal started
+        started += 1
+        await release.wait()
+        return DIAGNOSIS
+
+    from httpx import ASGITransport, AsyncClient
+
+    app = create_app(store_with(), diagnose=slow)
+    url = "http://test/api/shots/dailies:SEQ01:SH030:job-7/diagnose"
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        both = asyncio.gather(client.post(url), client.post(url))
+        await asyncio.sleep(0.05)
+        release.set()
+        responses = await both
+
+    assert all(r.status_code == 200 for r in responses)
+    assert started == 1, "a second press while one is in flight must not start another"
