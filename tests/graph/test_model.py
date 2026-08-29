@@ -172,3 +172,82 @@ def test_the_same_edge_added_twice_changes_no_answer():
     assert slack_seconds(p, "A", now_epoch=0) == 1800
     assert slack_seconds(p, "B", now_epoch=0) == 1800
     assert p.critical_path() == ["A", "B"]
+
+
+def test_a_finished_upstream_still_heads_the_critical_path():
+    """``estimated_seconds=0`` is the ordinary end state, not an edge case.
+
+    Remaining work drains to zero as a shot renders, so every shot passes through a
+    zero-duration moment. A zero-duration head ties with its successor on chain length,
+    and picking the start by that tie-break alone made the answer depend on which of the
+    two ids sorted first. The same graph under two spellings must give the same chain.
+    """
+    finished_first = Production(deadline_epoch=3600)
+    finished_first.add_shot(ShotNode(id="A", estimated_seconds=0))
+    finished_first.add_shot(ShotNode(id="Z", estimated_seconds=100))
+    finished_first.add_dependency(Dependency(upstream="A", downstream="Z"))
+
+    renamed = Production(deadline_epoch=3600)
+    renamed.add_shot(ShotNode(id="Z", estimated_seconds=0))
+    renamed.add_shot(ShotNode(id="A", estimated_seconds=100))
+    renamed.add_dependency(Dependency(upstream="Z", downstream="A"))
+
+    assert finished_first.critical_path() == ["A", "Z"]
+    assert renamed.critical_path() == ["Z", "A"]
+    # Slack is name-blind already; pinned here so the pair cannot drift apart.
+    assert slack_seconds(finished_first, "A", now_epoch=0) == 3500
+    assert slack_seconds(renamed, "Z", now_epoch=0) == 3500
+
+
+def test_a_diamond_takes_the_longest_branch_on_the_way_in_as_well_as_out():
+    """Fan-in is the half a downstream-only test leaves unpinned.
+
+    ``_longest_chain`` takes a maximum in both directions. The fan-out test holds the
+    outbound half; a ``sum`` slipped into the inbound half would still pass it, and would
+    understate slack on every shot that waits on more than one upstream.
+    """
+    p = Production(deadline_epoch=3600)
+    for sid, secs in [("A", 300), ("B", 200), ("C", 400), ("D", 100)]:
+        p.add_shot(ShotNode(id=sid, estimated_seconds=secs))
+    p.add_dependency(Dependency(upstream="A", downstream="B"))
+    p.add_dependency(Dependency(upstream="A", downstream="C"))
+    p.add_dependency(Dependency(upstream="B", downstream="D"))
+    p.add_dependency(Dependency(upstream="C", downstream="D"))
+    # D waits on the slower of its two branches (A -> C = 700), not on their sum.
+    assert slack_seconds(p, "D", now_epoch=0) == 3600 - 700 - 100
+    assert slack_seconds(p, "B", now_epoch=0) == 3600 - 300 - 200 - 100
+    assert slack_seconds(p, "A", now_epoch=0) == 3600 - 300 - 500
+    assert p.critical_path() == ["A", "C", "D"]
+
+
+def test_a_shot_stored_under_a_key_that_is_not_its_id_is_refused():
+    """Every traversal keys off the dict key, so a mismatched ``id`` is a lie in the data.
+
+    Left alone, ``critical_path`` reports the key while ``slack_seconds`` only answers to
+    the field, and the two halves of the board disagree about what the shot is called.
+    """
+    data = {
+        "deadline_epoch": 3600,
+        "shots": {"A": {"id": "WRONG", "estimated_seconds": 10}},
+        "dependencies": [],
+    }
+    with pytest.raises(ValueError, match="A"):
+        Production.model_validate(data)
+
+
+def test_removing_a_shot_an_edge_still_names_reports_like_every_other_bad_graph():
+    """``shots`` is a public mutable field, so this is reachable without a private call.
+
+    The cycle case already promises a ``ValueError`` naming the offending shots. A caller
+    catching ``ValueError`` around a traversal should not have a bare ``KeyError`` from a
+    private helper come through instead.
+    """
+    p = Production(deadline_epoch=3600)
+    p.add_shot(ShotNode(id="A", estimated_seconds=10))
+    p.add_shot(ShotNode(id="B", estimated_seconds=10))
+    p.add_dependency(Dependency(upstream="A", downstream="B"))
+    p.shots.pop("B")
+    with pytest.raises(ValueError, match="B"):
+        p.critical_path()
+    with pytest.raises(ValueError, match="B"):
+        slack_seconds(p, "A", now_epoch=0)

@@ -105,11 +105,12 @@ class Production(BaseModel):
     Holds no clock. The deadline is an absolute epoch second and ``now`` arrives as an
     argument, so the same production answers "where do we stand" for any instant.
 
-    The invariant is that the graph is acyclic and every edge names a shot the production
-    holds. :meth:`add_dependency` enforces it on the insertion path and a model validator
-    enforces it on the deserialisation path, because a production reconstructed from JSON
-    has not been through ``add_dependency`` and would otherwise carry a cycle into the
-    first traversal that reads it.
+    The invariant has three parts: the graph is acyclic, every edge names a shot the
+    production holds, and every shot is stored under a key equal to its own ``id``.
+    :meth:`add_shot` and :meth:`add_dependency` enforce it on the insertion path and a
+    model validator enforces it on the deserialisation path, because a production
+    reconstructed from JSON has not been through either and would otherwise carry a cycle,
+    a dangling edge, or a node whose ``id`` nothing reads into the first traversal.
     """
 
     deadline_epoch: int = Field(
@@ -123,20 +124,20 @@ class Production(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _edges_are_resolvable_and_acyclic(self) -> Production:
-        """Hold the graph invariant on the deserialisation path as well as the API one."""
-        unknown = sorted(
-            {
-                shot_id
-                for dep in self.dependencies
-                for shot_id in (dep.upstream, dep.downstream)
-                if shot_id not in self.shots
-            }
-        )
-        if unknown:
+    def _shots_are_keyed_by_id_and_edges_are_resolvable_and_acyclic(self) -> Production:
+        """Hold all three graph invariants on the deserialisation path, not just two.
+
+        The dict key is the identity every traversal uses, so a node stored under a key
+        that is not its own ``id`` is not a cosmetic mismatch: ``critical_path`` would
+        report the key while ``slack_seconds`` only answers to the field, and the two
+        halves of a board would disagree about what the shot is called.
+        """
+        mismatched = sorted(key for key, node in self.shots.items() if key != node.id)
+        if mismatched:
             raise ValueError(
-                f"dependencies name shots this production does not hold: {', '.join(unknown)}"
+                f"shots are stored under keys that do not match their id: {', '.join(mismatched)}"
             )
+        self._require_edges_resolvable()
         self._topological_order()
         return self
 
@@ -157,7 +158,9 @@ class Production(BaseModel):
         chain takes a maximum over successors, and the topological sort counts a repeat
         into the waiting count and back out of it), and it is left alone rather than
         silently de-duplicated: quietly dropping a caller's write is the worse of the two
-        surprises.
+        surprises. It does mean a caller that re-syncs the graph on every poll must build
+        a fresh :class:`Production` rather than re-adding its edges into the existing one,
+        or ``dependencies`` grows without bound and drags every traversal with it.
 
         Raises:
             ValueError: if either end is not a shot this production holds, or if the edge
@@ -215,6 +218,7 @@ class Production(BaseModel):
         """
         if not self.shots:
             return []
+        upstream = self._upstream_map()
         downstream = self._downstream_map()
         after = self._longest_chain(reversed(self._topological_order()), downstream)
 
@@ -222,15 +226,46 @@ class Production(BaseModel):
             """Sort key: longest remaining chain first, then id, so ties are stable."""
             return (-(self.shots[shot_id].estimated_seconds + after[shot_id]), shot_id)
 
-        # A chain starting mid-graph is never longer than one starting at an ancestor of
-        # its head, so taking the best start over every shot lands on a source on its own.
-        path = [min(self.shots, key=chain_from)]
+        # The start is taken from the chain heads only. Ranging over every shot instead
+        # would be correct only if no shot could have zero duration, and zero is the
+        # ordinary end state here: ``estimated_seconds`` is work *remaining*, so it drains
+        # to zero as a shot finishes. A zero-duration head ties exactly with its successor
+        # on chain length, and the id tie-break would then decide whether the head stayed
+        # in the path, making the same graph answer differently under two spellings.
+        # A non-empty acyclic graph always has at least one head.
+        heads = [shot_id for shot_id in self.shots if not upstream[shot_id]]
+        path = [min(heads, key=chain_from)]
         while downstream[path[-1]]:
             path.append(min(downstream[path[-1]], key=chain_from))
         return path
 
+    def _require_edges_resolvable(self) -> None:
+        """Refuse a graph whose edges name shots ``shots`` does not hold.
+
+        Both construction doors already refuse a dangling edge, so reaching this needs
+        ``shots`` or ``dependencies`` to have been mutated in place: they are public
+        fields, and ``p.shots.pop(...)`` while an edge still names the shot is the easy
+        way to do it. It reports as a ``ValueError`` naming the offending ids because that
+        is how every other bad-graph condition in this module reports, and a caller
+        wrapping a traversal in ``except ValueError`` should not have a bare ``KeyError``
+        from a private helper come through instead.
+        """
+        unknown = sorted(
+            {
+                shot_id
+                for dep in self.dependencies
+                for shot_id in (dep.upstream, dep.downstream)
+                if shot_id not in self.shots
+            }
+        )
+        if unknown:
+            raise ValueError(
+                f"dependencies name shots this production does not hold: {', '.join(unknown)}"
+            )
+
     def _downstream_map(self) -> dict[str, list[str]]:
         """For each shot, the shots that wait on it."""
+        self._require_edges_resolvable()
         adjacency: dict[str, list[str]] = {shot_id: [] for shot_id in self.shots}
         for dep in self.dependencies:
             adjacency[dep.upstream].append(dep.downstream)
@@ -238,6 +273,7 @@ class Production(BaseModel):
 
     def _upstream_map(self) -> dict[str, list[str]]:
         """For each shot, the shots it waits on."""
+        self._require_edges_resolvable()
         adjacency: dict[str, list[str]] = {shot_id: [] for shot_id in self.shots}
         for dep in self.dependencies:
             adjacency[dep.downstream].append(dep.upstream)
