@@ -28,7 +28,9 @@ code that actually runs in production.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 from collections.abc import Awaitable, Callable, Iterable, Sequence
 from typing import TYPE_CHECKING, Any
 
@@ -69,6 +71,8 @@ _USER_ID = "dailies-api"
 
 #: Async callable the HTTP route holds: a shot id in, a checked diagnosis out.
 Diagnose = Callable[[str], Awaitable[dict[str, Any]]]
+
+_log = logging.getLogger(__name__)
 
 _SessionFactory = Callable[[str], "AbstractAsyncContextManager[MCPSession]"]
 _RunAgent = Callable[["Agent", str], Awaitable[str]]
@@ -124,6 +128,73 @@ def shot_label(shot_id: str) -> str:
     return parts[2] if len(parts) == 4 else shot_id
 
 
+#: How many times to attempt an investigation that comes back rate-limited.
+#:
+#: Bounded, not indefinite: the route has a timeout and a supervisor waiting, and a
+#: retry loop that outlives either is worse than a clear failure. Three attempts covers
+#: the observed case, which is a brief concurrency spike rather than a project that is
+#: out of quota for the day.
+RETRY_ATTEMPTS = 3
+
+#: Seconds before the first retry, doubling after that.
+#:
+#: Measured, not guessed: on 2026-08-29 ten concurrent calls as the runtime service
+#: account returned two 429s while sequential calls never did. The allowance recovers in
+#: about a second, so the first backoff only has to outlast a burst, not a daily cap.
+RETRY_DELAY_SECONDS = 2.0
+
+
+def _is_rate_limited(exc: BaseException) -> bool:
+    """Whether ``exc`` is Vertex saying "ask again" rather than "no".
+
+    Matched on the class name and the message rather than by importing the ADK's
+    ``_ResourceExhaustedError``: it is private, it moved once already between versions
+    (the ``LogRecord`` incident cost a whole render), and this module must stay
+    importable without the ``agent`` extra installed. The 429 code is in the message
+    text on every variant seen so far, so both checks are cheap and neither is load
+    bearing alone.
+    """
+    name = type(exc).__name__
+    text = str(exc)
+    return "ResourceExhausted" in name or "RESOURCE_EXHAUSTED" in text or "429" in text
+
+
+async def run_with_retry(
+    call: Callable[[], Awaitable[str]],
+    *,
+    attempts: int = RETRY_ATTEMPTS,
+    delay: float = RETRY_DELAY_SECONDS,
+) -> str:
+    """Run ``call``, retrying only a rate limit, with exponential backoff.
+
+    A 429 is the one model-side failure that means "ask again" rather than "this cannot
+    be answered". Everything else is passed straight through: retrying a retired model
+    id or a malformed request only spends the caller's minute to reach the same place.
+
+    The first real end-to-end diagnosis this project ever ran failed on a 429, because
+    the ADK agent loop makes one model call per tool round trip and the trial project's
+    concurrency allowance is smaller than that. Without this, the board would have told
+    a supervisor their render could not be diagnosed when nothing about the render was
+    wrong.
+    """
+    backoff = delay
+    for attempt in range(1, attempts + 1):
+        try:
+            return await call()
+        except Exception as exc:
+            if not _is_rate_limited(exc) or attempt == attempts:
+                raise
+            _log.warning(
+                "Investigation rate-limited (attempt %d of %d); retrying in %.1fs",
+                attempt,
+                attempts,
+                backoff,
+            )
+            await asyncio.sleep(backoff)
+            backoff *= 2
+    raise AssertionError("unreachable: the loop either returns or raises")  # pragma: no cover
+
+
 async def run_agent(agent: Agent, prompt: str) -> str:
     """Run the investigator to its final answer and return the text of it.
 
@@ -140,17 +211,25 @@ async def run_agent(agent: Agent, prompt: str) -> str:
     runner = InMemoryRunner(agent=agent, app_name=APP_NAME)
     try:
         session = await runner.session_service.create_session(app_name=APP_NAME, user_id=_USER_ID)
-        answer = ""
         message = types.Content(role="user", parts=[types.Part(text=prompt)])
-        async for event in runner.run_async(
-            user_id=_USER_ID, session_id=session.id, new_message=message
-        ):
-            # Only the final response, and the last one of those: the stream also carries
-            # every tool call and its result, and concatenating those would hand
-            # parse_diagnosis a transcript instead of an answer.
-            if event.is_final_response() and event.content and event.content.parts:
-                answer = "".join(part.text or "" for part in event.content.parts)
-        return answer
+
+        async def once() -> str:
+            # Re-run from the top rather than resuming the stream: the ADK raises out of
+            # the middle of an agent turn, and there is no safe point to pick it back up
+            # from. An investigation is read-only - it queries Prometheus and Loki and
+            # writes nothing - so repeating it costs a little latency and nothing else.
+            answer = ""
+            async for event in runner.run_async(
+                user_id=_USER_ID, session_id=session.id, new_message=message
+            ):
+                # Only the final response, and the last one of those: the stream also carries
+                # every tool call and its result, and concatenating those would hand
+                # parse_diagnosis a transcript instead of an answer.
+                if event.is_final_response() and event.content and event.content.parts:
+                    answer = "".join(part.text or "" for part in event.content.parts)
+            return answer
+
+        return await run_with_retry(once)
     finally:
         await runner.close()
 
