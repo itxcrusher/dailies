@@ -115,9 +115,18 @@ def investigation_prompt(shot_id: str) -> str:
     label = shot_label(shot_id)
     return (
         f"Diagnose shot {label} on the current render.\n\n"
-        f"The board tracks it as {shot_id!r}; Grafana labels the series for it "
-        f'shot="{label}", on job "dailies-render".\n\n'
-        "Two things about this stack, so you do not waste turns rediscovering them:\n"
+        f"The board tracks it as {shot_id!r}.\n\n"
+        "The two datasources do NOT label this shot the same way, and getting it wrong "
+        "returns an empty result rather than an error:\n"
+        f'- Prometheus: ordinary labels. Select with {{shot="{label}", '
+        'job="dailies-render"}.\n'
+        "- Loki: only service_name is a stream label. shot, render_job and event_kind "
+        "are structured metadata, so a stream selector on them matches nothing at all. "
+        f'Select the stream and then filter: {{service_name="dailies-render"}} '
+        f'| shot="{label}". Add | event_kind="asset_missing" to look for a missing '
+        "asset.\n\n"
+        "Two more things about this stack, so you do not waste turns rediscovering "
+        "them:\n"
         "- The render job has usually finished by the time you are asked. An instant "
         "PromQL query returns nothing for a finished job, because the series has passed "
         f"out of Prometheus staleness. Query a range from {LOOKBACK} to now instead, "
@@ -125,7 +134,9 @@ def investigation_prompt(shot_id: str) -> str:
         "on the board, so its telemetry exists somewhere in that window: if a narrower "
         "range comes back empty, widen it before concluding there is no data.\n"
         "- A render that exited 0 can still have produced broken frames. The logs are "
-        "where that shows up, so read them even when the metrics look healthy.\n\n"
+        "where that shows up, so read them even when the metrics look healthy. An empty "
+        "Loki result is far more often the wrong selector than an absent log: check the "
+        "stream selector above before reporting that a shot has no logs.\n\n"
         "Answer with the JSON object described in your instructions and nothing else."
     )
 
