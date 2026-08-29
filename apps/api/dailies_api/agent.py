@@ -67,16 +67,31 @@ __all__ = [
 
 #: The Gemini model the investigator runs on.
 #:
-#: ``gemini-3.7-flash``, read off ai.google.dev/gemini-api/docs/models on 2026-08-27,
-#: where it is the current generally-available Flash model and the one described as built
-#: for agentic workflows and reliable multi-step execution. That is this agent's shape:
-#: several tool calls, each one deciding the next. A preview id was avoided deliberately -
-#: ``gemini-3-pro-preview`` was shut down in March 2026, and a demo that dies on a preview
-#: retirement is a demo that dies.
+#: ``gemini-2.5-flash``: fast enough that a judge clicking Diagnose is not left waiting,
+#: and strong enough for this agent's shape, which is several tool calls each deciding the
+#: next, ending in a schema-constrained answer.
 #:
-#: ADK does not validate this beyond the ``gemini-.*`` pattern, so a wrong id here fails
-#: at the first API call, not at import. Override per call site with ``model=``.
-INVESTIGATOR_MODEL = "gemini-3.7-flash"
+#: This id was **verified against Vertex in this project and region** rather than read out
+#: of a docs page, and the distinction turned out to matter. The previous value here was
+#: ``gemini-3.7-flash``, taken from ai.google.dev on 2026-08-27. That is the Gemini *API*
+#: surface; this project runs on *Vertex*, and the two do not publish the same ids. Vertex
+#: answers that name with a flat 404:
+#:
+#:     Publisher model `.../publishers/google/models/gemini-3.7-flash` was not found or
+#:     your project does not have access to it.
+#:
+#: A live sweep of us-central1 on 2026-08-29 returned exactly three servable ids:
+#: ``gemini-2.5-flash``, ``gemini-2.5-flash-lite`` and ``gemini-2.5-pro``. Nothing 3.x
+#: resolves, with or without a dot in the version.
+#:
+#: The failure mode is why this comment is long. ADK does not validate the id beyond the
+#: ``gemini-.*`` pattern, so a wrong one raises nothing at import, passes every test that
+#: fakes the model, and dies at the first real diagnosis. Every unit test here injects a
+#: fake, so the whole suite stays green while the deployed agent cannot answer at all.
+#: **Re-verify with a real ``generateContent`` call before changing this**, against the
+#: project and region the code actually runs in. Override per call site with ``model=``;
+#: ``gemini-2.5-pro`` is the one-parameter upgrade if a diagnosis needs deeper reasoning.
+INVESTIGATOR_MODEL = "gemini-2.5-flash"
 
 #: Grafana MCP tools the investigator may be given, by their server-side names.
 #:
