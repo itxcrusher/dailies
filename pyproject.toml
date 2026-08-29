@@ -32,7 +32,12 @@ dev = ["pytest>=8.3", "pytest-asyncio>=0.24", "ruff>=0.7", "httpx>=0.27"]
 # httpx is declared here rather than left to arrive under `mcp`: dailies_api.mcp_transport
 # imports it directly to speak Streamable HTTP to the Grafana MCP server, and a direct
 # import on a transitive dependency breaks silently the day the intermediary drops it.
-agent = ["google-adk>=1.20", "mcp>=1.2", "httpx>=0.27"]
+#
+# Capped <2 for the same reason the OpenTelemetry pins are: the image is built with an
+# unlocked `pip install ".[agent]"`, so an unbounded floor lets a major release change the
+# container without changing this repo, and nothing in the suite drives the ADK surface
+# `run_agent` uses (InMemoryRunner, session_service.create_session, event.is_final_response).
+agent = ["google-adk>=1.20,<2", "mcp>=1.2", "httpx>=0.27"]
 
 [tool.setuptools.packages.find]
 where = ["packages/telemetry", "packages/render", "packages/graph", "apps/api"]
