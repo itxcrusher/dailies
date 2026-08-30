@@ -143,7 +143,11 @@ def test_the_instruction_guards_against_flagging_a_plain_frame():
     """
     from dailies_api.visual_qa import VISUAL_INSTRUCTION
 
-    lowered = VISUAL_INSTRUCTION.lower()
+    # Whitespace-normalised, because the prompt is hard-wrapped for readability and a
+    # phrase that happens to straddle a line break is a formatting detail, not a change
+    # in what the model is told. The first version of this test asserted the raw
+    # substring and failed on exactly that.
+    lowered = " ".join(VISUAL_INSTRUCTION.lower().split())
     assert "grey" in lowered or "gray" in lowered
     assert "not by themselves suspicious" in lowered or "not by itself a defect" in lowered
 
