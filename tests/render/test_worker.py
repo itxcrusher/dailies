@@ -270,3 +270,51 @@ def test_a_render_without_a_deadline_declares_none():
 
     record_stream([], RenderRequest(shot="SH010"), Spy())
     assert declared[0]["deadline"] is None
+
+
+# --- where frames are written --------------------------------------------------------
+
+
+def test_frames_go_under_the_mounted_bucket_when_one_is_present():
+    """The output path is composed in Python, not by the shell.
+
+    Cloud Run environment values are literal strings with no expansion, so setting
+    DAILIES_OUTPUT to "/frames/${DAILIES_SHOT}/frame_####" in Terraform would have
+    created a directory named "${DAILIES_SHOT}". The job passes the mount point instead
+    and the shot is interpolated here, where a test can see it.
+    """
+    request = request_from_env(
+        {"DAILIES_SHOT": "SH050", "DAILIES_FRAMES_DIR": "/frames"}
+    )
+    assert request.output == "/frames/SH050/frame_####"
+
+
+def test_no_mounted_bucket_keeps_the_local_default():
+    """A `docker run` with no bucket must still render somewhere writable."""
+    request = request_from_env({"DAILIES_SHOT": "SH050"})
+    assert request.output == "/tmp/dailies/frame_####"
+
+
+def test_an_explicit_output_wins_over_the_mount():
+    """An operator naming a path meant it, and must not be second-guessed."""
+    request = request_from_env(
+        {
+            "DAILIES_SHOT": "SH050",
+            "DAILIES_FRAMES_DIR": "/frames",
+            "DAILIES_OUTPUT": "/somewhere/else/f_####",
+        }
+    )
+    assert request.output == "/somewhere/else/f_####"
+
+
+def test_a_shot_that_could_escape_the_mount_is_refused():
+    """The shot label reaches a filesystem path, so it cannot contain traversal.
+
+    A shot is operator-supplied and lands in a bucket path. Nothing today would send
+    '../', but a path built from an unvalidated label is the kind of thing that stays
+    harmless right up until it is not.
+    """
+    request = request_from_env(
+        {"DAILIES_SHOT": "../../etc", "DAILIES_FRAMES_DIR": "/frames"}
+    )
+    assert ".." not in request.output

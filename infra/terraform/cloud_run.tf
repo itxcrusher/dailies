@@ -289,12 +289,13 @@ resource "google_cloud_run_v2_job" "render" {
           }
         }
 
-        # Where Blender writes. Pointed into the mounted bucket rather than /tmp, so a
-        # frame outlives the container that produced it and Visual QA has something to
-        # look at.
+        # The mount point, not a full path. Cloud Run environment values are literal
+        # strings with no shell expansion, so "/frames/$${DAILIES_SHOT}/..." here would
+        # create a directory named "$${DAILIES_SHOT}". The worker composes the path from
+        # this and the shot, where a test can see it.
         env {
-          name  = "DAILIES_OUTPUT"
-          value = "/frames/$${DAILIES_SHOT}/frame_####"
+          name  = "DAILIES_FRAMES_DIR"
+          value = "/frames"
         }
 
         volume_mounts {

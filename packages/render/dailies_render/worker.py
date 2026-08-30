@@ -183,6 +183,38 @@ def build_command(request: RenderRequest) -> list[str]:
     return argv
 
 
+def _output_path(env: Mapping[str, str], shot: str) -> str:
+    """Where Blender writes its frames.
+
+    Composed here rather than in the deployment, because **Cloud Run environment values
+    are literal strings with no shell expansion**. Setting this to
+    ``/frames/${DAILIES_SHOT}/frame_####`` in Terraform creates a directory named
+    ``${DAILIES_SHOT}``; the job passes the mount point instead and the shot is
+    interpolated in Python, where a test can see it.
+
+    Precedence, most specific first:
+
+    1. ``DAILIES_OUTPUT`` - an operator naming a path meant it, and is not second-guessed.
+    2. ``DAILIES_FRAMES_DIR`` - the mounted bucket. Frames go under the shot so a render
+       can be found without listing the whole bucket.
+    3. ``/tmp`` - a ``docker run`` with no bucket still has to render somewhere writable.
+
+    The shot reaches a filesystem path, so it is stripped of anything that could climb
+    out of the mount. Nothing today sends a traversal; a path built from an unvalidated
+    operator-supplied label is the kind of thing that is harmless until it is not.
+    """
+    explicit = (env.get("DAILIES_OUTPUT") or "").strip()
+    if explicit:
+        return explicit
+
+    frames_dir = (env.get("DAILIES_FRAMES_DIR") or "").strip()
+    if not frames_dir:
+        return "/tmp/dailies/frame_####"
+
+    safe = "".join(c for c in shot if c.isalnum() or c in "._-").strip("._-") or "unknown"
+    return f"{frames_dir.rstrip('/')}/{safe}/frame_####"
+
+
 def request_from_env(env: Mapping[str, str] | None = None) -> RenderRequest:
     """Build a request from the container's environment.
 
@@ -202,11 +234,12 @@ def request_from_env(env: Mapping[str, str] | None = None) -> RenderRequest:
         except ValueError as exc:
             raise ValueError(f"{name} must be an integer, got {raw!r}") from exc
 
+    shot = env.get("DAILIES_SHOT", "SH010")
     return RenderRequest(
-        shot=env.get("DAILIES_SHOT", "SH010"),
+        shot=shot,
         frame_start=_int("DAILIES_FRAME_START", 1),
         frame_end=_int("DAILIES_FRAME_END", 1),
-        output=env.get("DAILIES_OUTPUT", "/tmp/dailies/frame_####"),
+        output=_output_path(env, shot),
         blend_file=env.get("DAILIES_BLEND_FILE") or None,
         scene_script=env.get("DAILIES_SCENE_SCRIPT") or None,
         engine=env.get("DAILIES_ENGINE", "CYCLES"),
