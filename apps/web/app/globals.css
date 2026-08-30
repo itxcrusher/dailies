@@ -1,486 +1,647 @@
-/* The board is read in a dim machine room at 2am, next to a projector, and on a phone in
-   a review theatre. Everything below is chosen for legibility in that room rather than
-   for looking novel in a screenshot: one dark ground, a small number of hues that each
-   mean exactly one thing, and no state that is signalled by colour alone. */
+/* Slate.
+   ==========================================================================
+   The direction chosen on 2026-08-30 from four that were built and compared.
+   Its reasoning, and the three that were rejected, are recorded in the entry's
+   design/DECISION.md. The short version, because it governs everything below:
+
+   A clapperboard. The masthead carries the diagonal stripe, a shot is a card
+   marked SCENE and ROLL, and the investigator speaks from a yellow band. The
+   film-set vernacular is the point - this is a tool for people who read call
+   sheets, and it should look like it belongs in that room rather than in a
+   generic observability suite.
+
+   Three rules that are load-bearing rather than stylistic:
+
+   1. YELLOW IS THE INVESTIGATOR'S COLOUR AND NOTHING ELSE'S. It marks where a
+      model spoke. Spending it on a heading or a hover would destroy the one
+      device that tells a reader which words on the page were generated.
+   2. GREEN AND RED MEAN STATUS ONLY. Never decoration, never a heading.
+   3. FIGURES ARE MONO AND TABULAR. Frame counts are compared down a column,
+      and proportional digits shimmer as they update.
+
+   Committed dark, deliberately, with no light theme. This is read in a dim
+   machine room next to a projector; a light variant would be a second design
+   maintained for nobody. Every colour is painted explicitly rather than
+   inherited, so the page holds on any ground. */
 
 :root {
   color-scheme: dark;
-  /* The page's own side padding, as a variable because the diagnosis has to subtract it
-     from the viewport to work out how wide it may be. See `.diagnosis`. */
+
   --page-pad: 1.5rem;
-  --bg: #0b0d10;
-  --panel: #14181d;
-  /* One step below the panel: what a diagnosis sits on, so an answer reads as attached
-     to the row above it rather than floating as another card on the same plane. */
-  --sunken: #0f1317;
-  --line: #232a32;
-  --text: #e7edf3;
-  --muted: #8b97a5;
-  /* Machine input: the queries the investigator actually ran. Distinct from every risk
-     hue, because a query is not a severity. */
-  --query: #7dd3fc;
-  --on-track: #4ade80;
-  --watch: #fbbf24;
-  --at-risk: #fb923c;
-  --critical: #f87171;
-  --missed: #a78bfa;
+
+  /* Ground and structure. Near-black rather than pure, so the white cards read
+     as lit rather than cut out. */
+  --k: #0b0b0b;
+  --k-raise: #0e0e0e;
+  --w: #f4f4f2;
+  --line: #2a2a2a;
+  --line-soft: #1c1c1c;
+  --dim: #8a8a8a;
+  --dimmer: #6a6a6a;
+
+  /* The investigator. One hue, one meaning. */
+  --y: #ffd400;
+  --y-ink: #0b0b0b;
+
+  /* Status. Nothing else may use these. */
+  --ok: #00c27a;
+  --bad: #ff3b52;
+  --watch: #ffb020;
+  --at-risk: #ff8c42;
+  --missed: #ff3b52;
+
+  /* Machine input: the queries the investigator ran. A query is not a
+     severity, so it gets a hue outside the status set. */
+  --query: #7fe3ff;
+
+  --font-display: Archivo, "Archivo Black", system-ui, -apple-system, sans-serif;
+  --font-mono: "Roboto Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 * {
   box-sizing: border-box;
 }
 
-html,
+html {
+  /* The masthead stripe is a repeating gradient; without this a sub-pixel
+     seam appears between its bands on some zoom levels. */
+  -webkit-font-smoothing: antialiased;
+}
+
 body {
   margin: 0;
-  padding: 0;
-  background: var(--bg);
-  color: var(--text);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial,
-    sans-serif;
+  /* Explicit, not inherited: a transparent body borrows whatever ground it is
+     composited over, which is how a dark design ends up unreadable. */
+  background: var(--k);
+  color: var(--w);
+  font: 15px/1.55 var(--font-display);
 }
 
-main {
-  max-width: 68rem;
-  margin: 0 auto;
-  padding: 3rem var(--page-pad) 4rem;
+a {
+  color: inherit;
 }
 
-header h1 {
+:focus-visible {
+  /* Yellow is the investigator's, so focus takes white. It has to be visible
+     against both the near-black ground and the white slate headers. */
+  outline: 2px solid var(--w);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* --- the masthead device ------------------------------------------------- */
+
+.mast {
+  display: flex;
+  align-items: flex-end;
+  gap: 20px;
+  margin-bottom: 26px;
+}
+
+.mast h1,
+.mast .wordmark {
+  font: 800 clamp(34px, 5vw, 46px) / 0.9 var(--font-display);
+  letter-spacing: -0.03em;
   margin: 0;
-  font-size: 1.6rem;
-  letter-spacing: -0.02em;
-}
-
-header p {
-  margin: 0.4rem 0 0;
-  color: var(--muted);
-  font-size: 0.9rem;
-}
-
-.panel {
-  margin-top: 2rem;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--panel);
-  overflow-x: auto;
-}
-
-table {
-  width: 100%;
-  min-width: 40rem;
-  border-collapse: collapse;
-  font-size: 0.92rem;
-}
-
-th,
-td {
-  padding: 0.7rem 1rem;
-  text-align: left;
-  border-bottom: 1px solid var(--line);
-}
-
-th {
-  font-size: 0.72rem;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--muted);
-  font-weight: 600;
 }
 
-/* One tbody per shot, so the rule that separates shots is drawn between groups. The last
-   group closes against the panel border and needs no rule of its own. */
-tbody.shot:last-child > tr:last-child > td {
-  border-bottom: none;
+/* The clapper. Appears ONCE per page, at the top: repeating it turns a device
+   into wallpaper. */
+.stripe {
+  flex: 1;
+  height: 22px;
+  min-width: 60px;
+  background: repeating-linear-gradient(
+    115deg,
+    var(--w) 0 16px,
+    var(--k) 16px 32px
+  );
 }
 
-/* Every figure on this page is compared against another one: frame counts down a column,
-   evidence indices down a list, a frame range against the range in a log line.
-   Proportional digits make all three comparisons slower, so anything numeric opts into
-   tabular figures. `.num` adds the column alignment that only a table cell wants. */
-.num,
-.tnum {
-  font-variant-numeric: tabular-nums;
-  font-feature-settings: "tnum" 1;
-}
-
-.num {
-  text-align: right;
+.mast .count {
+  font: 500 12px/1 var(--font-mono);
+  letter-spacing: 0.18em;
+  color: var(--dim);
   white-space: nowrap;
 }
 
-.id {
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-  font-size: 0.86rem;
+@media (max-width: 640px) {
+  .stripe {
+    display: none;
+  }
+  .mast {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
 }
 
-.risk {
-  display: inline-block;
-  padding: 0.15rem 0.5rem;
-  border-radius: 999px;
-  font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  border: 1px solid currentColor;
+/* --- shot cards ---------------------------------------------------------- */
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 14px;
 }
 
-.risk-ON_TRACK {
-  color: var(--on-track);
-}
-.risk-WATCH {
-  color: var(--watch);
-}
-.risk-AT_RISK {
-  color: var(--at-risk);
-}
-.risk-CRITICAL {
-  color: var(--critical);
-}
-.risk-MISSED {
-  color: var(--missed);
-}
-
-/* A diagnosed shot's own row loses its rule: the answer below it belongs to it, and a
-   line between the two would read as a boundary between two unrelated things. */
-tbody.diagnosed > .shot-row > td {
-  border-bottom: none;
-}
-
-.diagnosis-row > td {
-  padding: 0 1rem 1.1rem;
-  background: var(--sunken);
-}
-
-/* The whole answer is bracketed by one rule down its left edge, which is what carries
-   "this belongs to the row above" across the width of the table.
-
-   Sticky, and never wider than the screen, because of what the table around it does. The
-   table has a 40rem minimum and the panel scrolls sideways, so on a phone a diagnosis
-   laid out at the table's width has its evidence off the right edge - the one thing on
-   this page that must be read is the one thing hidden. Driven at 390px before this rule
-   existed and the second query was cut mid-selector.
-
-   `min(100%, ...)` leaves the desktop case alone: there the viewport is wider than the
-   cell, so 100% wins and nothing moves. On a narrow screen the diagnosis sizes itself to
-   what is actually visible (the viewport, less the page padding and the cell's own), and
-   `sticky` holds it against the left edge so it stays readable while a supervisor scrolls
-   the frame columns sideways. */
-.diagnosis {
-  position: sticky;
-  left: 0;
-  width: min(100%, calc(100vw - (var(--page-pad) + 1rem) * 2 - 2px));
-  border-left: 2px solid var(--line);
-  padding: 0.1rem 0 0 0.9rem;
-}
-
-.diagnosis-head {
+.card {
+  border: 2px solid var(--w);
+  background: var(--k-raise);
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.6rem;
+  flex-direction: column;
 }
 
-.diagnosis-title {
-  margin: 0;
-  font-size: 0.72rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--muted);
+.card.miss {
+  border-color: var(--bad);
 }
 
-/* Confidence is a word first and a colour second. A chip that is only orange asks the
-   reader to hold a legend in their head, and "low" has to be as readable as "high" or
-   the field stops being an honest answer. */
-.confidence {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-  color: var(--muted);
+/* The slate header: SCENE / ROLL, white on black inverted, exactly as a
+   clapperboard prints it. */
+.slate {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px 10px;
+  padding: 10px 12px;
+  background: var(--w);
+  color: var(--k);
 }
 
-.confidence-dot {
-  width: 0.45rem;
-  height: 0.45rem;
-  border-radius: 999px;
-  background: currentColor;
+.card.miss .slate {
+  background: var(--bad);
+  color: var(--w);
 }
 
-.confidence-high {
-  color: var(--on-track);
-}
-.confidence-medium {
-  color: var(--watch);
-}
-.confidence-low {
-  color: var(--at-risk);
+.slate .k {
+  font: 700 9px/1.5 var(--font-mono);
+  letter-spacing: 0.2em;
+  align-self: center;
 }
 
-/* The claim. Larger than the table it sits under, because it is the sentence a
-   supervisor reads first and then decides whether to check. */
-.cause {
-  margin: 0.5rem 0 0;
-  max-width: 64ch;
-  font-size: 1.02rem;
-  line-height: 1.5;
-  color: var(--text);
-}
-
-.facts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem 2.25rem;
-  margin: 0.85rem 0 0;
-}
-
-.fact {
-  min-width: 0;
-}
-
-.fact dt {
-  font-size: 0.68rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--muted);
-}
-
-.fact dd {
-  margin: 0.15rem 0 0;
-  font-size: 0.9rem;
-  line-height: 1.45;
-  max-width: 52ch;
-  color: var(--text);
-}
-
-/* A frame range is read against the frame numbers in a log line, so it is set in the same
-   monospace those appear in. */
-.fact dd.tnum {
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-  font-size: 0.88rem;
-}
-
-/* The evidence is the reason this panel exists: it is what makes the cause checkable
-   rather than asserted, so it gets the most room and the strongest structure. */
-.evidence {
-  margin-top: 1.1rem;
-}
-
-.evidence-head {
-  display: flex;
-  align-items: baseline;
-  gap: 0.6rem;
-  margin: 0 0 0.5rem;
-  font-size: 0.72rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--muted);
-}
-
-.evidence-count {
-  font-weight: 500;
+.slate .v {
+  font: 700 15px/1.4 var(--font-mono);
   letter-spacing: 0.02em;
-  text-transform: none;
-  color: var(--muted);
-  opacity: 0.85;
-}
-
-.evidence-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 0.5rem;
-}
-
-.evidence-item {
-  display: grid;
-  grid-template-columns: 1.6rem minmax(0, 1fr);
-  gap: 0.55rem;
-  padding: 0.6rem 0.75rem;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel);
-}
-
-.evidence-index {
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-  font-size: 0.75rem;
-  line-height: 1.5;
-  color: var(--muted);
-}
-
-.evidence-body {
-  min-width: 0;
-}
-
-/* Shown whole, and allowed to wrap. This is the string a reader pastes back into Grafana
-   to check the answer, so truncating it or hiding half of it behind a scrollbar would
-   defeat the point of printing it at all. Soft wrapping leaves the copied text identical
-   to the query that ran. */
-.evidence-query {
-  display: block;
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-  font-size: 0.82rem;
-  line-height: 1.5;
-  color: var(--query);
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-.evidence-finding {
-  margin: 0.35rem 0 0;
-  font-size: 0.88rem;
-  line-height: 1.5;
-  color: var(--text);
+.card .body {
+  padding: 16px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
 }
 
-/* Both of these mark an answer that broke DIAGNOSIS_SCHEMA on the way here. Said out
-   loud, in the warning hue, because an absent evidence section would read as though
-   nobody looked rather than as an answer that cannot be checked. */
-.evidence-missing,
-.evidence-unsupported {
-  margin: 0;
-  font-size: 0.85rem;
-  line-height: 1.5;
+.frames {
+  font: 700 44px/1 var(--font-mono);
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.frames span {
+  font-size: 19px;
+  color: var(--dimmer);
+  font-weight: 500;
+}
+
+.track {
+  height: 8px;
+  background: #1e1e1e;
+}
+
+.track i {
+  display: block;
+  height: 8px;
+  background: var(--ok);
+}
+
+.card.miss .track i {
+  background: var(--bad);
+}
+
+.status b {
+  display: block;
+  font: 700 11px/1.6 var(--font-mono);
+  letter-spacing: 0.2em;
+  color: var(--ok);
+}
+
+.status.s-WATCH b {
   color: var(--watch);
 }
-
-.empty,
-.error {
-  padding: 1.5rem;
-  color: var(--muted);
-  font-size: 0.9rem;
+.status.s-AT_RISK b {
+  color: var(--at-risk);
+}
+.status.s-CRITICAL b,
+.status.s-MISSED b {
+  color: var(--missed);
 }
 
-.error {
-  color: var(--critical);
+.status em {
+  font-style: normal;
+  font: 400 12px/1.5 var(--font-mono);
+  color: var(--dim);
+  display: block;
 }
 
-.error code {
-  color: var(--muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+.status .caveat {
+  color: var(--dimmer);
+  font-style: italic;
 }
 
-/* On a phone in a review theatre the table already scrolls sideways inside the panel.
-   The diagnosis must not add a second axis of scrolling, so its inset shrinks and the
-   fact pairs stack instead of sitting side by side. */
-@media (max-width: 40rem) {
-  :root {
-    --page-pad: 1rem;
-  }
-
-  main {
-    padding: 2rem var(--page-pad) 3rem;
-  }
-
-  .diagnosis {
-    padding-left: 0.7rem;
-  }
-
-  /* Side by side, a frame range and a whole sentence of recommended action leave the
-     action with three words a line. Stacked, each gets the width it needs. */
-  .facts {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 0.6rem;
-  }
-}
-
-/* --- the diagnose control ------------------------------------------------------- */
-
-.actions {
-  /* Right-aligned against the table's edge so the buttons form one column the eye can
-     run down, rather than drifting with the risk pill's width. */
-  text-align: right;
-  white-space: nowrap;
-}
+/* --- the diagnose control ------------------------------------------------ */
 
 .diagnose {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 0.75rem;
-  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: auto;
+  padding-top: 4px;
 }
 
 .diagnose button {
-  font: inherit;
-  font-size: 0.8125rem;
-  letter-spacing: 0.02em;
-  color: var(--text);
-  background: transparent;
-  border: 1px solid var(--rule-strong, #3a3f47);
-  border-radius: 999px;
-  padding: 0.35rem 0.9rem;
+  font: 700 11px/1 var(--font-mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--k);
+  background: var(--y);
+  border: 0;
+  padding: 10px 16px;
   cursor: pointer;
-  transition: border-color 120ms ease, background-color 120ms ease;
+  transition:
+    background-color 150ms ease,
+    transform 150ms ease;
 }
 
 .diagnose button:hover:not(:disabled) {
-  border-color: var(--accent, #6ea8fe);
-  background: rgba(110, 168, 254, 0.08);
-}
-
-.diagnose button:focus-visible {
-  /* Visible focus is not decoration here: this is the only control on the page, so it is
-     the only thing a keyboard user can land on. */
-  outline: 2px solid var(--accent, #6ea8fe);
-  outline-offset: 2px;
+  background: #ffe45c;
 }
 
 .diagnose button:disabled {
   cursor: progress;
-  opacity: 0.65;
+  background: #4a4526;
+  color: #b3a95f;
 }
 
 .diagnose-status {
-  font-size: 0.75rem;
-  color: var(--muted);
-  /* The status sits left of the button and can be a whole sentence when it carries an
-     API error, so it wraps rather than pushing the button off the row. */
-  white-space: normal;
-  text-align: right;
-  max-width: 32ch;
+  font: 400 11px/1.45 var(--font-mono);
+  color: var(--dim);
+  max-width: 30ch;
 }
 
 .diagnose-status.error {
-  color: var(--danger, #f87171);
+  color: var(--bad);
 }
 
-/* --- delivery estimate, under the risk pill ------------------------------------- */
+/* --- the investigator's report ------------------------------------------- */
 
-.delivery {
+.report {
+  margin-top: 26px;
+  border: 2px solid var(--y);
+}
+
+.report .rhead {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  background: var(--y);
+  color: var(--y-ink);
+  padding: 9px 14px;
+}
+
+.report .rhead b {
+  font: 800 13px/1 var(--font-display);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.report .rhead span {
+  font: 500 11px/1 var(--font-mono);
+  letter-spacing: 0.12em;
+}
+
+.report .cause {
+  font: 500 clamp(17px, 2.2vw, 21px) / 1.45 var(--font-display);
+  margin: 0;
+  padding: 18px 16px;
+  border-bottom: 2px solid var(--line);
+}
+
+.report .cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+@media (max-width: 720px) {
+  .report .cols {
+    grid-template-columns: 1fr;
+  }
+  .report .cols > div + div {
+    border-left: 0 !important;
+    border-top: 2px solid var(--line);
+  }
+}
+
+.report .cols > div {
+  padding: 14px 16px;
+}
+
+.report .cols > div + div {
+  border-left: 2px solid var(--line);
+}
+
+.report .cols h4 {
+  margin: 0 0 6px;
+  font: 700 9px/1 var(--font-mono);
+  letter-spacing: 0.2em;
+  color: var(--y);
+  text-transform: uppercase;
+}
+
+.report .cols p {
+  margin: 0;
+  font-size: 14px;
+  color: #cfcfcf;
+}
+
+.report ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: e;
+  border-top: 2px solid var(--line);
+}
+
+.report ol li {
+  counter-increment: e;
+  padding: 13px 16px 13px 46px;
+  position: relative;
+  border-bottom: 1px solid var(--line);
+}
+
+.report ol li:last-child {
+  border-bottom: 0;
+}
+
+/* Numbered because the evidence IS a sequence: each query was run in order and
+   the next one follows from the last. */
+.report ol li::before {
+  content: counter(e, decimal-leading-zero);
+  position: absolute;
+  left: 16px;
+  top: 15px;
+  font: 700 11px/1 var(--font-mono);
+  color: var(--y);
+}
+
+.report code {
   display: block;
-  margin-top: 0.35rem;
-  font-size: 0.72rem;
-  line-height: 1.5;
-  color: var(--muted);
+  font: 400 12px/1.5 var(--font-mono);
+  color: var(--query);
+  overflow-wrap: anywhere;
 }
 
-.delivery > span {
+.report ol p {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--dim);
+}
+
+/* --- shared page furniture ----------------------------------------------- */
+
+.wrap {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 30px var(--page-pad) 80px;
+}
+
+.error,
+.empty {
+  font: 400 14px/1.6 var(--font-mono);
+  color: var(--dim);
+  border: 2px solid var(--line);
+  padding: 18px;
+}
+
+.error {
+  color: var(--bad);
+  border-color: var(--bad);
+}
+
+.error code {
+  color: var(--dim);
   display: block;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
 }
 
-/* Tabular figures so a column of durations lines up rather than shimmering. */
-.slack,
-.eta {
-  font-variant-numeric: tabular-nums;
+/* --- the case page ------------------------------------------------------- */
+
+.landing {
+  max-width: 1120px;
 }
 
-/* Late is the one state that must not be read as decoration, so it takes the danger
-   colour rather than the muted one. Everything else here stays quiet on purpose: the
-   risk pill is the signal, and this line is the reason for it. */
-.slack.late {
-  color: var(--danger, #f87171);
-  font-weight: 500;
+.mast .to-board,
+.cta {
+  font: 700 11px/1 var(--font-mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--k);
+  background: var(--y);
+  padding: 11px 16px;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background-color 150ms ease;
 }
 
-.caveat {
+.mast .to-board:hover,
+.cta:hover {
+  background: #ffe45c;
+}
+
+.cta {
+  display: inline-block;
+  margin-top: 22px;
+}
+
+.landing section {
+  /* Sections are separated by space, not by rules: the page already has a strong
+     structural device in the masthead stripe, and adding hairlines everywhere
+     would turn a clapperboard into a broadsheet. */
+  margin: clamp(48px, 8vw, 84px) 0 0;
+}
+
+.eyebrow {
+  font: 700 10px/1 var(--font-mono);
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--y);
+  margin: 0 0 18px;
+}
+
+/* The hero is the thesis, so it gets the page's largest type and its only
+   italic. Everything else on the page is quieter than this by design. */
+.hero h1 {
+  font: 800 clamp(30px, 5.2vw, 58px) / 1.06 var(--font-display);
+  letter-spacing: -0.03em;
+  margin: 0 0 26px;
+  text-wrap: balance;
+  max-width: 20ch;
+}
+
+.hero h1 em {
   font-style: italic;
-  opacity: 0.75;
+  color: var(--y);
+}
+
+.lede {
+  font-size: clamp(16px, 1.9vw, 19px);
+  line-height: 1.6;
+  color: #c9c9c9;
+  max-width: 62ch;
+  margin: 0 0 16px;
+}
+
+.lede strong {
+  color: var(--w);
+  font-weight: 700;
+}
+
+.voice-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+.voice-grid figure {
+  margin: 0;
+  border-left: 3px solid var(--line);
+  padding: 2px 0 2px 16px;
+}
+
+.voice-grid blockquote {
+  margin: 0 0 10px;
+  font: 400 15.5px/1.55 var(--font-display);
+  color: #d6d6d6;
+}
+
+.voice-grid figcaption {
+  font: 400 11px/1.5 var(--font-mono);
+  letter-spacing: 0.08em;
+  color: var(--dimmer);
+}
+
+.proof-lede,
+.cost-lede {
+  font-size: 16px;
+  color: var(--dim);
+  max-width: 60ch;
+  margin: 0 0 20px;
+}
+
+.proof-grid {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  max-width: 760px;
+}
+
+.proof-note,
+.cost-note {
+  font-size: 15px;
+  line-height: 1.65;
+  color: #b8b8b8;
+  max-width: 66ch;
+  margin: 22px 0 0;
+}
+
+.proof-note strong {
+  color: var(--w);
+}
+
+.chain-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.chain-list li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 18px;
+  padding: 18px 0;
+  border-top: 1px solid var(--line-soft);
+}
+
+.chain-list .n {
+  font: 700 12px/1.6 var(--font-mono);
+  color: var(--dimmer);
+}
+
+.chain-list h3 {
+  margin: 0 0 5px;
+  font: 700 17px/1.3 var(--font-display);
+  letter-spacing: -0.01em;
+}
+
+.chain-list p {
+  margin: 0;
+  font-size: 15px;
+  color: var(--dim);
+  max-width: 62ch;
+}
+
+.cost-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 2px;
+  margin: 0;
+  border: 2px solid var(--line);
+}
+
+.cost-grid > div {
+  padding: 16px;
+  background: var(--k-raise);
+}
+
+.cost-grid dt {
+  font: 700 9px/1 var(--font-mono);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--dimmer);
+  margin-bottom: 10px;
+}
+
+.cost-grid dd {
+  margin: 0;
+  font: 700 30px/1 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+.cost-grid dd span {
+  font-size: 16px;
+  color: var(--dimmer);
+}
+
+.foot {
+  margin-top: clamp(48px, 8vw, 84px);
+  padding-top: 26px;
+  border-top: 2px solid var(--line);
+}
+
+.foot p {
+  margin: 20px 0 0;
+  font: 400 13px/1.6 var(--font-mono);
+  color: var(--dimmer);
+  max-width: 64ch;
 }
