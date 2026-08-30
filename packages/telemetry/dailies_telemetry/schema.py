@@ -78,7 +78,13 @@ METRICS: Final[Mapping[Metric, str]] = MappingProxyType(
         # value is unbounded cardinality: every render on a new deadline would mint a
         # fresh series for every metric carrying the job label set. As a value it costs
         # one series per job and reads back just as easily.
-        Metric.DEADLINE: "render_job_deadline_epoch",
+        # `_seconds` is not decoration. OpenTelemetry appends a metric's unit to its
+        # name unless the name already ends in it, so declaring this as
+        # `render_job_deadline_epoch` with unit="s" served it as
+        # `render_job_deadline_epoch_seconds` while every query used the declared name
+        # and came back empty. The board then reported every shot as having no deadline
+        # while the deadlines sat in Prometheus under a name nothing asked for.
+        Metric.DEADLINE: "render_job_deadline_epoch_seconds",
     }
 )
 
