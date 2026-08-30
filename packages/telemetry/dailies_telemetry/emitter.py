@@ -109,6 +109,15 @@ class RenderTelemetry:
             METRICS[Metric.FRAMES_EXPECTED],
             description="Frames this job contains",
         )
+        # The due date, as an absolute epoch second. Nothing downstream can rate delivery
+        # risk without one: slack is the distance between when a shot will finish and
+        # when it is due, and with no due date every row falls back to "on track", which
+        # is a verdict nobody computed.
+        self._deadline = meter.create_gauge(
+            METRICS[Metric.DEADLINE],
+            unit="s",
+            description="Epoch second this job is due",
+        )
 
     def record(self, event: RenderEvent) -> None:
         """Fan one event out to every instrument it carries a reading for.
@@ -135,7 +144,13 @@ class RenderTelemetry:
         if event.kind in FAILURE_KINDS:
             self._failed.add(1, event.failure_labels())
 
-    def declare_job(self, *, frames_expected: int, labels: Mapping[str, str]) -> None:
+    def declare_job(
+        self,
+        *,
+        frames_expected: int,
+        labels: Mapping[str, str],
+        deadline_epoch: int | None = None,
+    ) -> None:
         """Publish how many frames this job contains.
 
         Separate from :meth:`record` because it is not derivable from the render's
@@ -147,5 +162,12 @@ class RenderTelemetry:
         Args:
             frames_expected: Frames in this job, inclusive of both ends of the range.
             labels: Job-scoped identity, normally ``RenderEvent.job_labels()``.
+            deadline_epoch: When this job is due, as an absolute epoch second, or
+                ``None`` when nothing is promised. **A missing deadline is not a zero
+                one**: emitting 0 would read downstream as 1970, the most overdue any
+                shot can be, and would paint every undated render red. So no series is
+                published at all, and absence stays absence.
         """
         self._expected.set(frames_expected, dict(labels))
+        if deadline_epoch is not None:
+            self._deadline.set(deadline_epoch, dict(labels))

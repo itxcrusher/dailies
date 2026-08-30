@@ -95,6 +95,41 @@ class Shot(BaseModel):
         default=Risk.ON_TRACK,
         description="Standing against the deadline. Optimistic until told otherwise.",
     )
+    eta_epoch: int | None = Field(
+        default=None,
+        description=(
+            "Absolute epoch second this shot is expected to finish, or None when no "
+            "honest estimate exists yet. A shot that has rendered no frames has no "
+            "observed rate to project, which is the ordinary state at the top of a "
+            "render rather than an error."
+        ),
+    )
+    deadline_epoch: int | None = Field(
+        default=None,
+        description=(
+            "Absolute epoch second this shot is due, or None when nothing is promised. "
+            "Declared by the render itself and carried through telemetry, so the board "
+            "and the investigator read the same due date from the same place."
+        ),
+    )
+    slack_seconds: int | None = Field(
+        default=None,
+        description=(
+            "Room between the ETA and the deadline. Negative is a real answer and the "
+            "most important one, so it is never clamped. None means there is no deadline "
+            "or no estimate to measure against one; that is deliberately not zero, "
+            "because zero means 'exactly on the wire', which is a claim rather than an "
+            "absence."
+        ),
+    )
+    confidence: str = Field(
+        default="unknown",
+        description=(
+            "How steady the frame costs behind eta_epoch were: high, medium, low, or "
+            "unknown when there is no estimate at all. This rates the ETA, not the "
+            "investigator's diagnosis; the two share a word and measure different things."
+        ),
+    )
     diagnosis: dict[str, Any] | None = Field(
         default=None,
         description=(

@@ -145,3 +145,89 @@ async def test_risk_defaults_to_on_track_until_something_says_otherwise():
     )
     shots = await GrafanaShotSource(grafana).list_shots()
     assert shots[0].risk is Risk.ON_TRACK
+
+
+# --- delivery telemetry --------------------------------------------------------------
+
+
+class RichFake(FakeGrafana):
+    """Answers the progress queries plus the deadline gauge and the duration histogram."""
+
+    def __init__(self, expected, completed, deadline=None, buckets=None):
+        super().__init__(expected, completed)
+        self._deadline = deadline or []
+        self._buckets = buckets or []
+
+    async def query_prometheus(self, expr: str, **kwargs):
+        self.queries.append(expr)
+        if "deadline" in expr:
+            return {"data": self._deadline}
+        if "bucket" in expr:
+            return {"data": self._buckets}
+        return await super().query_prometheus(expr, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_the_source_reports_the_deadline_it_found():
+    grafana = RichFake(
+        expected=[series("48", shot="SH030", **IDENTITY)],
+        completed=[series("12", shot="SH030", **IDENTITY)],
+        deadline=[series("1788100000", shot="SH030", **IDENTITY)],
+    )
+    source = GrafanaShotSource(grafana)
+
+    await source.list_shots()
+
+    assert source.telemetry["dailies:SEQ01:SH030:job-7"]["deadline_epoch"] == 1788100000
+
+
+@pytest.mark.asyncio
+async def test_a_shot_with_no_deadline_series_reports_none_not_zero():
+    grafana = RichFake(
+        expected=[series("48", shot="SH030", **IDENTITY)],
+        completed=[series("12", shot="SH030", **IDENTITY)],
+    )
+    source = GrafanaShotSource(grafana)
+
+    await source.list_shots()
+
+    assert source.telemetry["dailies:SEQ01:SH030:job-7"]["deadline_epoch"] is None
+
+
+@pytest.mark.asyncio
+async def test_durations_come_from_the_histogram_not_from_a_mean():
+    """The spread has to be real, so it is reconstructed from bucket counts.
+
+    A mean repeated once per frame has zero spread, and zero spread is what the
+    forecaster reads as HIGH confidence, so the least-informed estimate would wear the
+    most confident badge.
+    """
+    grafana = RichFake(
+        expected=[series("4", shot="SH030", **IDENTITY)],
+        completed=[series("4", shot="SH030", **IDENTITY)],
+        buckets=[
+            series("2", le="5", shot="SH030", **IDENTITY),
+            series("4", le="60", shot="SH030", **IDENTITY),
+            series("4", le="+Inf", shot="SH030", **IDENTITY),
+        ],
+    )
+    source = GrafanaShotSource(grafana)
+
+    await source.list_shots()
+
+    durations = source.telemetry["dailies:SEQ01:SH030:job-7"]["durations"]
+    assert len(durations) == 4, "four frames observed, four durations"
+    assert len(set(durations)) > 1, "frames two buckets apart must not look identical"
+
+
+@pytest.mark.asyncio
+async def test_telemetry_is_keyed_by_the_same_id_as_the_shots():
+    grafana = RichFake(
+        expected=[series("4", shot="SH030", **IDENTITY)],
+        completed=[series("4", shot="SH030", **IDENTITY)],
+    )
+    source = GrafanaShotSource(grafana)
+
+    shots = await source.list_shots()
+
+    assert set(source.telemetry) == {s.id for s in shots}

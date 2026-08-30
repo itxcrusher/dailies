@@ -208,7 +208,7 @@ def test_record_stream_declares_the_frame_range_before_recording():
     declared: list[tuple[int, dict[str, str]]] = []
 
     class Spy:
-        def declare_job(self, *, frames_expected, labels):
+        def declare_job(self, *, frames_expected, labels, deadline_epoch=None):
             declared.append((frames_expected, dict(labels)))
 
         def record(self, event):
@@ -231,7 +231,7 @@ def test_a_single_frame_render_declares_one_frame():
     declared: list[int] = []
 
     class Spy:
-        def declare_job(self, *, frames_expected, labels):
+        def declare_job(self, *, frames_expected, labels, deadline_epoch=None):
             declared.append(frames_expected)
 
         def record(self, event):
@@ -239,3 +239,34 @@ def test_a_single_frame_render_declares_one_frame():
 
     record_stream([], RenderRequest(shot="SH010", frame_start=7, frame_end=7), Spy())
     assert declared == [1]
+
+
+def test_a_render_can_carry_a_deadline():
+    """The due date comes from the request, like the frame range, not from the output."""
+    declared: list[dict] = []
+
+    class Spy:
+        def declare_job(self, *, frames_expected, labels, deadline_epoch=None):
+            declared.append({"frames": frames_expected, "deadline": deadline_epoch})
+
+        def record(self, event):
+            pass
+
+    request = RenderRequest(shot="SH010", frame_start=1, frame_end=4, deadline_epoch=1788100000)
+    record_stream([], request, Spy())
+
+    assert declared[0]["deadline"] == 1788100000
+
+
+def test_a_render_without_a_deadline_declares_none():
+    declared: list[dict] = []
+
+    class Spy:
+        def declare_job(self, *, frames_expected, labels, deadline_epoch=None):
+            declared.append({"deadline": deadline_epoch})
+
+        def record(self, event):
+            pass
+
+    record_stream([], RenderRequest(shot="SH010"), Spy())
+    assert declared[0]["deadline"] is None

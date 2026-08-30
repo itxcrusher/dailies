@@ -38,6 +38,7 @@ class Metric(StrEnum):
     RETRY = "retry"
     QUEUE_WAIT = "queue_wait"
     DEADLINE_SLACK = "deadline_slack"
+    DEADLINE = "deadline"
 
 
 class Priority(StrEnum):
@@ -73,6 +74,11 @@ METRICS: Final[Mapping[Metric, str]] = MappingProxyType(
         Metric.RETRY: "render_retry_total",
         Metric.QUEUE_WAIT: "render_queue_wait_seconds",
         Metric.DEADLINE_SLACK: "render_deadline_slack_seconds",
+        # A gauge holding an absolute epoch second, not a label. An epoch as a label
+        # value is unbounded cardinality: every render on a new deadline would mint a
+        # fresh series for every metric carrying the job label set. As a value it costs
+        # one series per job and reads back just as easily.
+        Metric.DEADLINE: "render_job_deadline_epoch",
     }
 )
 

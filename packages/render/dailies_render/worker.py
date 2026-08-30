@@ -86,6 +86,10 @@ class RenderRequest:
     #: to open. The image ships one so the container can render without an asset mount.
     scene_script: str | None = None
     engine: str = "CYCLES"
+    #: When this render is due, as an absolute epoch second, or None when nothing is
+    #: promised. Absolute rather than a duration so it survives a queue: a render that
+    #: waits two hours before starting is due at the same moment it always was.
+    deadline_epoch: int | None = None
     project: str = "dailies"
     sequence: str = "SEQ01"
     render_job: str = "local"
@@ -206,6 +210,7 @@ def request_from_env(env: Mapping[str, str] | None = None) -> RenderRequest:
         blend_file=env.get("DAILIES_BLEND_FILE") or None,
         scene_script=env.get("DAILIES_SCENE_SCRIPT") or None,
         engine=env.get("DAILIES_ENGINE", "CYCLES"),
+        deadline_epoch=_optional_int(env, "DAILIES_DEADLINE_EPOCH"),
         project=env.get("DAILIES_PROJECT", "dailies"),
         sequence=env.get("DAILIES_SEQUENCE", "SEQ01"),
         render_job=env.get("DAILIES_RENDER_JOB", "local"),
@@ -255,6 +260,23 @@ def build_logger_provider(resource_attributes: Mapping[str, str] | None = None) 
     return provider
 
 
+def _optional_int(env: Mapping[str, str], name: str) -> int | None:
+    """Read an optional integer setting, treating unset and unparseable alike.
+
+    Returns ``None`` rather than raising or defaulting to zero. For a deadline those
+    three outcomes are very different: zero is 1970, which is the most overdue any shot
+    can be and would paint an undated render red, and raising would take down a render
+    over a setting it does not need to do its job.
+    """
+    raw = (env.get(name) or "").strip()
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
 def _stamp(event: RenderEvent, request: RenderRequest) -> RenderEvent:
     """Return ``event`` with the identity the parser could not know filled in.
 
@@ -299,7 +321,11 @@ def record_stream(
     # frame count up front means the failure is still legible - "12 of 48, then nothing"
     # rather than a completed count with no denominator, which is exactly the shape a
     # delivery-risk estimate needs when a job dies.
-    telemetry.declare_job(frames_expected=request.frames_expected, labels=request.job_labels)
+    telemetry.declare_job(
+        frames_expected=request.frames_expected,
+        labels=request.job_labels,
+        deadline_epoch=request.deadline_epoch,
+    )
 
     recorded = 0
     for event in render_from_stream(_tee(lines, echo), shot=request.shot):

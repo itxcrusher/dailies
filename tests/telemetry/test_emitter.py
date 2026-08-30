@@ -310,3 +310,55 @@ def test_redeclaring_a_job_overwrites_rather_than_accumulates():
     # A gauge, not a counter: a shot re-scoped mid-render holds 50 frames, not 98.
     point = collect(reader)[METRICS[Metric.FRAMES_EXPECTED]].data.data_points[0]
     assert point.value == 50
+
+
+# --- the deadline -------------------------------------------------------------------
+#
+# Slack is the distance between when a shot will finish and when it is due, so nothing
+# downstream can rate delivery risk without a due date. Telemetry had no notion of one,
+# which is why every row on the board fell back to ON_TRACK: the Risk column was
+# decorative, asserting a verdict nothing had computed.
+#
+# The deadline is declared the same way the frame count is, as a gauge stated once by the
+# worker, rather than carried as a metric LABEL. A label whose value is an epoch second
+# is unbounded cardinality: every render on a new deadline would mint a fresh series for
+# every metric that carries the label set, which is how a Prometheus bill becomes a
+# story. A gauge value costs one series per job and reads back just as easily.
+
+
+def test_a_job_can_declare_when_it_is_due():
+    tel, reader = make()
+    labels = RenderEvent.demo(kind=EventKind.FRAME_START, shot="SH010", frame=1).job_labels()
+
+    tel.declare_job(frames_expected=48, labels=labels, deadline_epoch=1788100000)
+
+    metrics = collect(reader)
+    assert METRICS[Metric.DEADLINE] in metrics
+    point = metrics[METRICS[Metric.DEADLINE]].data.data_points[0]
+    assert point.value == 1788100000
+    assert set(point.attributes) == set(JOB_LABELS)
+
+
+def test_a_job_with_no_deadline_publishes_no_deadline_series():
+    """Most renders have no date attached, and an absent deadline is not a zero one.
+
+    Emitting 0 would be read downstream as 1970, which is the most overdue any shot can
+    possibly be, and would paint every undated render bright red.
+    """
+    tel, reader = make()
+    labels = RenderEvent.demo(kind=EventKind.FRAME_START, shot="SH010", frame=1).job_labels()
+
+    tel.declare_job(frames_expected=48, labels=labels)
+
+    assert METRICS[Metric.DEADLINE] not in collect(reader)
+
+
+def test_the_deadline_is_job_scoped():
+    tel, reader = make()
+    labels = RenderEvent.demo(kind=EventKind.FRAME_START, shot="SH010", frame=1).job_labels()
+
+    tel.declare_job(frames_expected=4, labels=labels, deadline_epoch=1788100000)
+
+    point = collect(reader)[METRICS[Metric.DEADLINE]].data.data_points[0]
+    assert "frame" not in point.attributes
+    assert "worker" not in point.attributes

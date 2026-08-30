@@ -37,6 +37,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from dailies_api.delivery import rate
 from dailies_api.state import Shot, ShotStore
 
 __all__ = [
@@ -163,10 +164,18 @@ def build_shot_source(env: Mapping[str, str] | None = None) -> ShotSource | None
         on the next page load rather than a clean reconnect.
         """
 
+        def __init__(self) -> None:
+            self.telemetry: dict[str, Any] = {}
+
         async def list_shots(self) -> list[Shot]:
             async with connect(url) as session:
                 grafana = GrafanaMCP(session, prometheus_uid=prometheus_uid, loki_uid=loki_uid)
-                return await GrafanaShotSource(grafana).list_shots()
+                inner = GrafanaShotSource(grafana)
+                shots = await inner.list_shots()
+                # Carried up because the inner source is built per call and discarded;
+                # the route reads `source.telemetry` off the long-lived wrapper.
+                self.telemetry = inner.telemetry
+                return shots
 
     return _PerRequest()
 
@@ -340,11 +349,17 @@ def create_app(
             # Logging with a traceback; the board keeps serving what it already holds.
             _log.exception("Could not refresh shots from telemetry; serving what is held")
             return
+        # What telemetry knows beyond the frame counts: the due date and the observed
+        # frame costs, per shot. A source that does not carry it (a test fake, or a
+        # future source over something other than Grafana) simply rates on progress.
+        detail = getattr(source, "telemetry", None) or {}
+
         for found in discovered:
+            rated = rate(found, detail.get(found.id))
             held = shots.get(found.id)
             # Keep the fields telemetry cannot speak to, take the ones it owns.
             shots.upsert(
-                found if held is None else found.model_copy(update={"diagnosis": held.diagnosis})
+                rated if held is None else rated.model_copy(update={"diagnosis": held.diagnosis})
             )
 
     @app.get("/api/shots", response_model=ShotList, tags=["shots"])

@@ -100,12 +100,21 @@ def test_shot_detail_returns_the_stored_shot():
         )
     )
     body = _client(store).get("/api/shots/SH040").json()
+    # The whole serialised shape, deliberately: this route is what the board reads, so a
+    # field appearing or vanishing should fail here rather than surface as a blank column.
     assert body == {
         "id": "SH040",
         "frames_total": 240,
         "frames_done": 96,
         "risk": "CRITICAL",
         "diagnosis": {"cause": "worker OOM"},
+        # Delivery fields default to absent rather than zero. A shot handed straight to
+        # the store has not been rated, and "not known" is not "on the wire with no time
+        # left", which is what zeros here would claim.
+        "eta_epoch": None,
+        "deadline_epoch": None,
+        "slack_seconds": None,
+        "confidence": "unknown",
     }
 
 

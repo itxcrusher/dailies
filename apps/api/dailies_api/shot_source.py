@@ -24,6 +24,7 @@ from typing import Any, Protocol
 
 from dailies_telemetry.schema import METRICS, Metric
 
+from .duration_sample import sample_from_buckets
 from .state import Shot
 
 __all__ = ["LOOKBACK", "STEP_SECONDS", "GrafanaShotSource"]
@@ -84,6 +85,12 @@ class GrafanaShotSource:
 
     def __init__(self, grafana: _Queryable) -> None:
         self._grafana = grafana
+        #: What the delivery rating needs beyond frame counts, keyed by shot id: the due
+        #: date and the observed frame costs. Populated by :meth:`list_shots` rather than
+        #: returned alongside the shots, because :class:`~dailies_api.state.Shot` is the
+        #: board's contract and should not grow a field for every intermediate the rating
+        #: happens to want.
+        self.telemetry: dict[str, dict[str, Any]] = {}
 
     async def _series(self, metric: str) -> dict[tuple[str, ...], float]:
         """Query one metric and index its series by identity.
@@ -127,7 +134,10 @@ class GrafanaShotSource:
         """
         expected = await self._series(METRICS[Metric.FRAMES_EXPECTED])
         completed = await self._series(METRICS[Metric.FRAMES_COMPLETED])
+        deadlines = await self._series(METRICS[Metric.DEADLINE])
+        buckets = await self._histogram(f"{METRICS[Metric.FRAME_DURATION]}_bucket")
 
+        self.telemetry = {}
         shots: list[Shot] = []
         for key, frames_total in expected.items():
             try:
@@ -142,4 +152,42 @@ class GrafanaShotSource:
                     frames_done=int(completed.get(key, 0)),
                 )
             )
+            self.telemetry[shot_id] = {
+                # `.get` rather than a default: a shot with no deadline series has no due
+                # date, and None must survive as None. A 0 here would read as 1970, the
+                # most overdue any shot can be, and redden every undated render.
+                "deadline_epoch": int(deadlines[key]) if key in deadlines else None,
+                "durations": sample_from_buckets(buckets.get(key, {})),
+            }
         return sorted(shots, key=lambda shot: shot.id)
+
+    async def _histogram(self, metric: str) -> dict[tuple[str, ...], dict[float, float]]:
+        """Index a histogram's bucket counts by shot identity, then by ``le``.
+
+        Separate from :meth:`_series` because a bucket series carries one label the
+        others do not, ``le``, and collapsing on identity alone would have every bucket
+        of a shot overwrite the last and leave one arbitrary count standing.
+        """
+        response = await self._grafana.query_prometheus(
+            metric,
+            start_time=LOOKBACK,
+            end_time="now",
+            step_seconds=STEP_SECONDS,
+            query_type="range",
+        )
+        entries = response.get("data") if isinstance(response, dict) else None
+        indexed: dict[tuple[str, ...], dict[float, float]] = {}
+        for entry in entries or []:
+            labels = entry.get("metric") or {}
+            key = _key(labels)
+            if key is None:
+                continue
+            try:
+                # "+Inf" is how Prometheus spells the overflow bucket; float() reads it.
+                bound = float(labels.get("le"))
+            except (TypeError, ValueError):
+                continue
+            value = _last_value(entry)
+            if value is not None:
+                indexed.setdefault(key, {})[bound] = value
+        return indexed
