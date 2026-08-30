@@ -391,3 +391,63 @@ tbody.diagnosed > .shot-row > td {
     gap: 0.6rem;
   }
 }
+
+/* --- the diagnose control ------------------------------------------------------- */
+
+.actions {
+  /* Right-aligned against the table's edge so the buttons form one column the eye can
+     run down, rather than drifting with the risk pill's width. */
+  text-align: right;
+  white-space: nowrap;
+}
+
+.diagnose {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  justify-content: flex-end;
+}
+
+.diagnose button {
+  font: inherit;
+  font-size: 0.8125rem;
+  letter-spacing: 0.02em;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--rule-strong, #3a3f47);
+  border-radius: 999px;
+  padding: 0.35rem 0.9rem;
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.diagnose button:hover:not(:disabled) {
+  border-color: var(--accent, #6ea8fe);
+  background: rgba(110, 168, 254, 0.08);
+}
+
+.diagnose button:focus-visible {
+  /* Visible focus is not decoration here: this is the only control on the page, so it is
+     the only thing a keyboard user can land on. */
+  outline: 2px solid var(--accent, #6ea8fe);
+  outline-offset: 2px;
+}
+
+.diagnose button:disabled {
+  cursor: progress;
+  opacity: 0.65;
+}
+
+.diagnose-status {
+  font-size: 0.75rem;
+  color: var(--muted);
+  /* The status sits left of the button and can be a whole sentence when it carries an
+     API error, so it wraps rather than pushing the button off the row. */
+  white-space: normal;
+  text-align: right;
+  max-width: 32ch;
+}
+
+.diagnose-status.error {
+  color: var(--danger, #f87171);
+}

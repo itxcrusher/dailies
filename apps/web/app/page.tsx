@@ -15,6 +15,7 @@
  * folded away behind a disclosure nobody opens at 2am.
  */
 
+import { DiagnoseButton } from "./DiagnoseButton";
 import { normalizeDiagnosis, type Diagnosis } from "./diagnosis";
 
 type Risk = "ON_TRACK" | "WATCH" | "AT_RISK" | "CRITICAL" | "MISSED";
@@ -28,7 +29,7 @@ type Shot = {
 };
 
 /** How many columns the summary row has, so the diagnosis row can span exactly it. */
-const COLUMNS = 5;
+const COLUMNS = 6;
 
 /**
  * Where the API lives.
@@ -190,6 +191,10 @@ export default async function Board() {
   // Normalised once, here, so the count in the header and the rows below can never
   // disagree about which shots carry an answer.
   const rows = shots.map((shot) => ({ shot, diagnosis: normalizeDiagnosis(shot.diagnosis) }));
+  // Resolved here and passed down. apiBase() reads DAILIES_API_URL, which is server-only
+  // by design (a NEXT_PUBLIC_ name would be inlined at build time and a runtime value of
+  // that name would never reach the browser), so the client component cannot call it.
+  const base = apiBase();
   const diagnosed = rows.filter((row) => row.diagnosis !== null).length;
 
   return (
@@ -231,6 +236,9 @@ export default async function Board() {
                   Progress
                 </th>
                 <th scope="col">Risk</th>
+                {/* No header text: the column holds one button whose own label says what
+                    it does, and "Action" above it would be a word that adds nothing. */}
+                <th scope="col" aria-label="Diagnose" />
               </tr>
             </thead>
             {/* One tbody per shot: it binds a summary row to the diagnosis row that
@@ -245,6 +253,13 @@ export default async function Board() {
                   <td className="num">{percent(shot.frames_done, shot.frames_total)}%</td>
                   <td>
                     <span className={`risk risk-${shot.risk}`}>{shot.risk.replace("_", " ")}</span>
+                  </td>
+                  <td className="actions">
+                    <DiagnoseButton
+                      apiBase={base}
+                      shotId={shot.id}
+                      hasDiagnosis={diagnosis !== null}
+                    />
                   </td>
                 </tr>
                 {diagnosis ? (
