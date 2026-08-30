@@ -451,3 +451,36 @@ tbody.diagnosed > .shot-row > td {
 .diagnose-status.error {
   color: var(--danger, #f87171);
 }
+
+/* --- delivery estimate, under the risk pill ------------------------------------- */
+
+.delivery {
+  display: block;
+  margin-top: 0.35rem;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.delivery > span {
+  display: block;
+}
+
+/* Tabular figures so a column of durations lines up rather than shimmering. */
+.slack,
+.eta {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Late is the one state that must not be read as decoration, so it takes the danger
+   colour rather than the muted one. Everything else here stays quiet on purpose: the
+   risk pill is the signal, and this line is the reason for it. */
+.slack.late {
+  color: var(--danger, #f87171);
+  font-weight: 500;
+}
+
+.caveat {
+  font-style: italic;
+  opacity: 0.75;
+}

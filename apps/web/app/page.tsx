@@ -15,6 +15,7 @@
  * folded away behind a disclosure nobody opens at 2am.
  */
 
+import { describeConfidence, describeSlack, formatEta } from "./delivery";
 import { DiagnoseButton } from "./DiagnoseButton";
 import { normalizeDiagnosis, type Diagnosis } from "./diagnosis";
 
@@ -26,6 +27,13 @@ type Shot = {
   frames_done: number;
   risk: Risk;
   diagnosis: Record<string, unknown> | null;
+  // Delivery fields. All nullable, and null is meaningful rather than missing: a shot
+  // that has rendered no frames has no ETA to give, and a shot with no promised date
+  // has no slack. Rendering a zero for either would be inventing a claim.
+  eta_epoch?: number | null;
+  deadline_epoch?: number | null;
+  slack_seconds?: number | null;
+  confidence?: string | null;
 };
 
 /** How many columns the summary row has, so the diagnosis row can span exactly it. */
@@ -186,6 +194,27 @@ function DiagnosisPanel({ shotId, diagnosis }: { shotId: string; diagnosis: Diag
   );
 }
 
+function Delivery({ shot }: { shot: Shot }) {
+  const slack = describeSlack(shot.slack_seconds);
+  const eta = formatEta(shot.eta_epoch);
+  const caveat = describeConfidence(shot.confidence);
+
+  // Nothing honest to say is the ordinary state at the top of a render, and it renders
+  // as nothing rather than as a placeholder. A dash or a "0m" here would read as a
+  // measurement, and the whole point of the column is that a verdict has to be earned.
+  if (!slack && !eta) return null;
+
+  return (
+    <span className="delivery">
+      {slack ? (
+        <span className={(shot.slack_seconds ?? 0) < 0 ? "slack late" : "slack"}>{slack}</span>
+      ) : null}
+      {eta ? <span className="eta">ETA {eta}</span> : null}
+      {caveat ? <span className="caveat">{caveat}</span> : null}
+    </span>
+  );
+}
+
 export default async function Board() {
   const { shots, error } = await fetchShots();
   // Normalised once, here, so the count in the header and the rows below can never
@@ -253,6 +282,7 @@ export default async function Board() {
                   <td className="num">{percent(shot.frames_done, shot.frames_total)}%</td>
                   <td>
                     <span className={`risk risk-${shot.risk}`}>{shot.risk.replace("_", " ")}</span>
+                    <Delivery shot={shot} />
                   </td>
                   <td className="actions">
                     <DiagnoseButton
