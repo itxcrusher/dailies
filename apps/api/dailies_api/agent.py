@@ -182,11 +182,22 @@ How to work:
    built for traffic that arrives continuously. A render counter goes 0 to 3 in one burst
    over a few seconds, and increase(...[24h]) turns that into a fraction like 1.5, which
    means nothing. Take the last value of the series.
-4. Prefer the narrowest query that answers the question. A query over the whole farm when
+4. Keep step_seconds at 300 or below, and prefer 60. Prometheus resolves a range query at
+   each step boundary and only sees a series present within its lookback delta, five
+   minutes. A render lasts seconds, so a wider step steps straight over it and returns
+   nothing at all. Measured on this stack, one identical query: step 3600 and 900 return
+   zero series, step 300 returns the value, step 60 returns it five times.
+5. On this stack, an empty result is far more often a defect in your query than an
+   absence in the data. Three different ways to get one have already been observed here:
+   an instant query against a finished job, a Loki stream selector on a label that is
+   only structured metadata, and a step wider than the lookback delta. Before you report
+   that data is missing, vary the query, because the shot you were asked about is on the
+   board and its telemetry exists.
+6. Prefer the narrowest query that answers the question. A query over the whole farm when
    one shot is in question buries the signal you are looking for.
-5. Follow the frames. A shot-level average hides the two frames that are actually broken;
+7. Follow the frames. A shot-level average hides the two frames that are actually broken;
    per-frame data is usually where the cause is.
-6. Stop when the evidence stops. Extra queries that show nothing are still evidence, and
+8. Stop when the evidence stops. Extra queries that show nothing are still evidence, and
    an investigation that found nothing conclusive is a real result.
 
 Rules you do not break:

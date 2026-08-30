@@ -75,10 +75,21 @@ variable "cors_origins" {
   type        = string
   description = <<-EOT
     Comma-separated browser origins allowed to read the API (DAILIES_CORS_ORIGINS).
-    Left empty by default on purpose: the board's URL is only known after its service
-    exists, and wiring web.uri into the API here would make the two services depend on
-    each other in both directions. Set it in terraform.tfvars once the board URL is known,
-    or leave it empty if the board reads the API server-side.
+    Empty by default because the board's URL is only known after its service exists, and
+    wiring web.uri into the API here would make the two services depend on each other in
+    both directions. Set it in terraform.tfvars once the board URL is known.
+
+    It is NOT optional, and the sentence that used to end this description saying it
+    could be left empty "if the board reads the API server-side" is how it came to be
+    wrong. That held while the board only listed shots. The Diagnose button POSTs from
+    the BROWSER, so an empty value means FastAPI never installs the CORS middleware, the
+    preflight answers 405, and the button spins and fails with nothing in any server log.
+    The browser console is the only place that failure appears, which is why it survived
+    a green test suite, a passing build and a healthy deployment, and was found only by
+    driving a real browser against the deployed board.
+
+    List every hostname the board is served on, comma-separated: Cloud Run answers on two
+    forms per service and the Origin header carries whichever one the visitor used.
   EOT
   default     = ""
 }
