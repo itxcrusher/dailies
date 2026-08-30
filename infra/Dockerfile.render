@@ -109,8 +109,19 @@ USER dailies
 
 # What to render when the execution overrides nothing. The scene script is the fallback
 # that makes the container self-sufficient: no mounted asset, still a real Cycles render.
+#
+# DAILIES_OUTPUT is deliberately NOT set here, and the reason is worth the comment. It
+# used to be, as a harmless-looking default of /tmp/dailies/frame_####. Once the render
+# job gained a mounted bucket the worker learned to compose its output path from
+# DAILIES_FRAMES_DIR, but only when no explicit output was given, because an operator
+# naming a path means it. An image-level ENV is indistinguishable from that operator, so
+# this line won every time: every frame kept landing in /tmp, the bucket stayed empty,
+# and the render reported success. Nothing failed; the feature simply did not exist.
+#
+# The fallback lives in dailies_render.worker._output_path instead, where a test can see
+# which branch was taken. A default expressed as an environment variable cannot be told
+# apart from a decision.
 ENV DAILIES_SCENE_SCRIPT=/app/scenes/demo_scene.py \
-    DAILIES_OUTPUT=/tmp/dailies/frame_#### \
     DAILIES_SHOT=SH010 \
     DAILIES_FRAME_START=1 \
     DAILIES_FRAME_END=4

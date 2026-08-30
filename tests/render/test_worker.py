@@ -283,9 +283,7 @@ def test_frames_go_under_the_mounted_bucket_when_one_is_present():
     created a directory named "${DAILIES_SHOT}". The job passes the mount point instead
     and the shot is interpolated here, where a test can see it.
     """
-    request = request_from_env(
-        {"DAILIES_SHOT": "SH050", "DAILIES_FRAMES_DIR": "/frames"}
-    )
+    request = request_from_env({"DAILIES_SHOT": "SH050", "DAILIES_FRAMES_DIR": "/frames"})
     assert request.output == "/frames/SH050/frame_####"
 
 
@@ -314,7 +312,5 @@ def test_a_shot_that_could_escape_the_mount_is_refused():
     '../', but a path built from an unvalidated label is the kind of thing that stays
     harmless right up until it is not.
     """
-    request = request_from_env(
-        {"DAILIES_SHOT": "../../etc", "DAILIES_FRAMES_DIR": "/frames"}
-    )
+    request = request_from_env({"DAILIES_SHOT": "../../etc", "DAILIES_FRAMES_DIR": "/frames"})
     assert ".." not in request.output

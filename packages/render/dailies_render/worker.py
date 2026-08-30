@@ -354,6 +354,11 @@ def record_stream(
     # frame count up front means the failure is still legible - "12 of 48, then nothing"
     # rather than a completed count with no denominator, which is exactly the shape a
     # delivery-risk estimate needs when a job dies.
+    # Logged because the last time this was silently wrong, nothing anywhere said so:
+    # an image-level DAILIES_OUTPUT beat the mounted bucket and every frame went to /tmp
+    # while the bucket stayed empty and the render reported success.
+    print(f"dailies: writing frames to {request.output}", flush=True)
+
     telemetry.declare_job(
         frames_expected=request.frames_expected,
         labels=request.job_labels,
