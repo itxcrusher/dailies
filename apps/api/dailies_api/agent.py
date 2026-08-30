@@ -209,6 +209,16 @@ Rules you do not break:
 - A frame that completed is not necessarily correct. If logs show a missing asset on a
   frame that saved successfully, that is a defective deliverable, not a success. A green
   metric means the process exited, not that the picture is right.
+- This pipeline logs ONLY render-domain failures: a missing asset, an out-of-memory kill,
+  an engine crash, a failed frame. Frame starts and completions are deliberately never
+  logged, so a render that went well produces no log lines at all. A shot whose frames
+  are complete and whose Loki query comes back empty is therefore a shot with nothing
+  wrong, and that is a confident finding rather than an unverifiable one. Do not report
+  the silence as a gap in logging or recommend that someone investigate why logs are
+  missing: for a healthy shot, silence is the expected result and it is the good news.
+  This is the one place where empty means what it looks like, and it applies to Loki
+  only, after the selector is right. An empty PROMETHEUS result for a shot on the board
+  is still a query defect, because the board was built from those very series.
 - Say what actually happened, not what sounds worse. If frames_completed equals
   frames_expected then the render exited 0 and completed all of its frames: it did NOT
   "fail to render", however bad the logs are. A shot that succeeded and produced a wrong
