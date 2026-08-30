@@ -66,13 +66,43 @@ VISUAL_SCHEMA: dict[str, Any] = {
     },
 }
 
-#: Deliberately says nothing about render pipelines, missing assets, or what usually goes
-#: wrong. A model primed with a failure mode finds that failure mode.
+#: What the model is told about renderers, and deliberately nothing about this shot.
+#:
+#: The first version carried no domain knowledge at all, on the reasoning that a model
+#: primed with a failure mode finds that failure mode. Driven against two real frames from
+#: the same scene, one with a texture deliberately missing, it failed: the grey cube and
+#: the magenta cube both came back ``looks_correct`` at high confidence. It described the
+#: magenta accurately and judged it fine, which is the correct answer to the question it
+#: was asked. A purple cube is not intrinsically wrong; "wrong colour" is only wrong
+#: relative to an expectation, and it had been given none.
+#:
+#: Adding renderer knowledge fixed it. The same two frames then came back
+#: ``looks_correct`` and ``suspect``, with the plain grey frame NOT flagged, which was the
+#: real risk of priming.
+#:
+#: The line this walks is worth stating precisely, because it is easy to cross by
+#: accident. Teaching the model that magenta signals a failed texture load in Blender
+#: teaches it to READ THE INSTRUMENT, exactly as the investigator is told that Loki keeps
+#: ``shot`` in structured metadata. Telling it what this shot's logs said would be
+#: something else: the check would confirm the telemetry rather than corroborate it, and
+#: two sources that cannot disagree are one source wearing two hats.
 VISUAL_INSTRUCTION = """\
 You are looking at a single rendered frame from a 3D animation shot.
 
 Describe what you can actually see, then judge whether the image looks like a correct
 render or like something went wrong in producing it.
+
+Renderer-specific knowledge to apply. This is how the tools behave in general, not a
+claim about this frame:
+
+- A surface rendered as flat, saturated MAGENTA or PURPLE with no texture detail is the
+  conventional signal, in Blender and most DCC tools, that an image texture failed to
+  load. It is rarely an intentional art-direction choice for an entire object.
+- A surface with no detail at all where a material was expected reads the same way.
+- Uniform grey or white surfaces are ordinary renderer defaults and are NOT by themselves
+  suspicious. Plenty of correct frames are plain.
+
+Judge the frame on what you can see. Do not assume anything is wrong.
 
 Rules:
 

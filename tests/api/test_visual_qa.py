@@ -101,3 +101,62 @@ def test_the_schema_requires_an_observation():
         "suspect",
         "broken",
     }
+
+
+# --- renderer domain knowledge -------------------------------------------------------
+#
+# Driven against two real frames on 2026-08-30, both rendered from the same scene, one
+# with a texture deliberately missing. The blind check as first written FAILED:
+#
+#   clean  (grey cube)     -> looks_correct, high
+#   broken (magenta cube)  -> looks_correct, high
+#
+# It described the magenta accurately and judged it fine, which on reflection is the
+# correct answer to the question it was asked. A purple cube is not intrinsically wrong;
+# "wrong colour" is only wrong relative to an expectation, and it had none.
+#
+# Adding RENDERER knowledge - not this shot's telemetry - fixed it:
+#
+#   clean  -> looks_correct, high   ("no textures or complex details")
+#   broken -> suspect,       high   ("solid, saturated magenta/purple")
+#
+# The distinction is the whole point. Telling it that magenta means a failed texture load
+# in Blender teaches it to read the instrument, the same way the investigator is told that
+# Loki keeps `shot` in structured metadata. It is not told what the answer is, and it
+# still knows nothing about what this shot's metrics or logs reported, so it remains a
+# source that can disagree with them.
+
+
+def test_the_instruction_carries_renderer_knowledge():
+    from dailies_api.visual_qa import VISUAL_INSTRUCTION
+
+    lowered = VISUAL_INSTRUCTION.lower()
+    assert "magenta" in lowered, "the missing-texture signature has to be taught"
+    assert "blender" in lowered or "dcc" in lowered
+
+
+def test_the_instruction_guards_against_flagging_a_plain_frame():
+    """The risk of priming: a model hunting for defects finds them in a plain render.
+
+    Our own demo scene is a grey cube on a dark background, so without this guard the
+    clean frame is the false positive waiting to happen.
+    """
+    from dailies_api.visual_qa import VISUAL_INSTRUCTION
+
+    lowered = VISUAL_INSTRUCTION.lower()
+    assert "grey" in lowered or "gray" in lowered
+    assert "not by themselves suspicious" in lowered or "not by itself a defect" in lowered
+
+
+def test_renderer_knowledge_is_not_telemetry_knowledge():
+    """The line that must not be crossed, restated as a test.
+
+    Teaching how the renderer signals failure is domain knowledge. Telling it what this
+    shot's logs said would make it confirm the metrics rather than corroborate them, and
+    two sources that cannot disagree are one source.
+    """
+    from dailies_api.visual_qa import VISUAL_INSTRUCTION, build_visual_prompt
+
+    whole = (VISUAL_INSTRUCTION + build_visual_prompt("SH201")).lower()
+    for leak in ("asset_missing", "jacket_diffuse", "prometheus", "loki", "exit code"):
+        assert leak not in whole, f"the visual check must not be told {leak!r}"
