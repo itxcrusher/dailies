@@ -31,7 +31,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from collections.abc import Awaitable, Callable, Iterable, Sequence
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from dailies_api.mcp_client import GrafanaMCP, MCPSession
@@ -219,8 +221,23 @@ async def run_with_retry(
     raise AssertionError("unreachable: the loop either returns or raises")  # pragma: no cover
 
 
-async def run_agent(agent: Agent, prompt: str) -> str:
+async def run_agent(
+    agent: Agent,
+    prompt: str,
+    *,
+    telemetry: Any = None,
+    runner_factory: Any = None,
+) -> str:
     """Run the investigator to its final answer and return the text of it.
+
+    Args:
+        agent: The built investigator.
+        prompt: What to ask it.
+        telemetry: An :class:`~dailies_api.agent_telemetry.AgentTelemetry`, or None to
+            record nothing. Injected rather than constructed here so a test can read the
+            instruments back, and so the API owns the meter provider's lifetime.
+        runner_factory: What builds the ADK runner. Defaults to ``InMemoryRunner``;
+            a test passes one that never reaches Gemini.
 
     The ADK's in-memory runner: session state lives for this call only, which is what a
     one-shot investigation wants, and it means the API holds no conversation to leak
@@ -229,10 +246,18 @@ async def run_agent(agent: Agent, prompt: str) -> str:
     Imported inside the function rather than at module import: the ADK is the ``agent``
     extra, and the read-only board routes must stay importable on the base install.
     """
-    from google.adk.runners import InMemoryRunner
     from google.genai import types
 
-    runner = InMemoryRunner(agent=agent, app_name=APP_NAME)
+    if runner_factory is None:
+        from google.adk.runners import InMemoryRunner
+
+        runner_factory = InMemoryRunner
+
+    model = str(getattr(agent, "model", "") or "unknown")
+    started = time.monotonic()
+    error_type: str | None = None
+
+    runner = runner_factory(agent=agent, app_name=APP_NAME)
     try:
         session = await runner.session_service.create_session(app_name=APP_NAME, user_id=_USER_ID)
         message = types.Content(role="user", parts=[types.Part(text=prompt)])
@@ -249,12 +274,27 @@ async def run_agent(agent: Agent, prompt: str) -> str:
                 # Only the final response, and the last one of those: the stream also carries
                 # every tool call and its result, and concatenating those would hand
                 # parse_diagnosis a transcript instead of an answer.
+                # Recorded per event rather than once at the end: an investigation is
+                # several model turns with tool calls between them, and only the sum of
+                # them is what the diagnosis actually cost.
+                if telemetry is not None:
+                    telemetry.record_usage(getattr(event, "usage_metadata", None), model=model)
                 if event.is_final_response() and event.content and event.content.parts:
                     answer = "".join(part.text or "" for part in event.content.parts)
             return answer
 
-        return await run_with_retry(once)
+        try:
+            return await run_with_retry(once)
+        except BaseException as exc:
+            # The failing calls are the ones a cost and reliability dashboard most needs:
+            # a chart of only the successes is how a broken agent looks healthy.
+            error_type = type(exc).__name__
+            raise
     finally:
+        if telemetry is not None:
+            telemetry.record_operation(
+                time.monotonic() - started, model=model, error_type=error_type
+            )
         await runner.close()
 
 
@@ -345,7 +385,8 @@ def build_diagnoser(
     loki_uid: str | None = None,
     tools: Iterable[str] = DEFAULT_TOOLS,
     session_factory: _SessionFactory = connect,
-    run: _RunAgent = run_agent,
+    run: _RunAgent | None = None,
+    telemetry: Any = None,
 ) -> Diagnose:
     """Build the callable the diagnose route runs.
 
@@ -357,13 +398,22 @@ def build_diagnoser(
             :data:`DEFAULT_TOOLS`, which is read-only.
         session_factory: Opens the MCP session. Defaults to
             :func:`dailies_api.mcp_transport.connect`; a test passes one over a fake.
-        run: Runs the agent and returns its text. Defaults to :func:`run_agent`; a test
-            passes one that never reaches Gemini.
+        run: Runs the agent and returns its text. Omit it for :func:`run_agent` with
+            ``telemetry`` already bound in; a test passes one that never reaches Gemini.
+            Its signature stays ``(agent, prompt)`` deliberately: threading ``telemetry``
+            through the call would have changed a documented injection contract, and
+            every existing fake with it, to carry a parameter only the default
+            implementation uses.
+        telemetry: An :class:`~dailies_api.agent_telemetry.AgentTelemetry` recording what
+            each investigation costs, or None to record nothing. Bound into the default
+            ``run`` rather than passed at the call site, so an injected ``run`` is
+            unaffected by it.
 
     Returns:
         An async callable taking a shot id and returning the checked diagnosis.
     """
     tool_names: Sequence[str] = tuple(tools)
+    invoke: _RunAgent = run if run is not None else partial(run_agent, telemetry=telemetry)
 
     async def diagnose(shot_id: str) -> dict[str, Any]:
         # Imported here, not at module scope: build_investigator needs the ADK, and this
@@ -374,7 +424,7 @@ def build_diagnoser(
         async with session_factory(mcp_url) as session:
             grafana = GrafanaMCP(session, prometheus_uid=prometheus_uid, loki_uid=loki_uid)
             agent = build_investigator(tool_names, grafana=grafana)
-            answer = await run(agent, investigation_prompt(shot_id))
+            answer = await invoke(agent, investigation_prompt(shot_id))
         return parse_diagnosis(answer, shot_id)
 
     return diagnose

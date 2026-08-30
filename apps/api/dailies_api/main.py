@@ -231,6 +231,27 @@ class Health(BaseModel):
     ok: bool = True
 
 
+def _build_agent_telemetry():
+    """The investigator's own metrics pipeline, or None when this deployment has no OTLP.
+
+    Wrapped rather than inlined so a failure to set up observability can never take down
+    the API. Instrumentation that breaks the thing it measures is worse than none: the
+    board would stop answering because a metrics exporter could not reach Grafana, which
+    is a spectacular way to fail at reliability engineering.
+    """
+    try:
+        from dailies_api.agent_telemetry import AgentTelemetry
+        from dailies_api.otlp import build_meter_provider
+
+        provider = build_meter_provider()
+        if provider is None:
+            return None
+        return AgentTelemetry(provider)
+    except Exception:  # noqa: BLE001 - see the docstring; this must never fail the app
+        _log.exception("Could not set up the agent's own telemetry; continuing without it")
+        return None
+
+
 def create_app(
     store: ShotStore | None = None,
     *,
@@ -271,6 +292,11 @@ def create_app(
     # process must not share a cooldown clock or a lock table.
     diagnosed_at: dict[str, float] = {}
     in_flight: dict[str, asyncio.Lock] = {}
+
+    # Built once per app, not per request: a PeriodicExportingMetricReader owns a thread
+    # and a flush timer, and one per diagnose call would leak both. None when the
+    # deployment has no OTLP endpoint, which a local run legitimately does not.
+    agent_telemetry = _build_agent_telemetry()
 
     app = FastAPI(
         title="Dailies",
@@ -452,7 +478,7 @@ def create_app(
             # ADK. mcp_settings raises the 503 when the deployment is unconfigured.
             from dailies_api.investigation import build_diagnoser
 
-            run = build_diagnoser(**mcp_settings())
+            run = build_diagnoser(**mcp_settings(), telemetry=agent_telemetry)
 
         from dailies_api.investigation import InvestigationFailed
         from dailies_api.mcp_transport import MCPTransportError
