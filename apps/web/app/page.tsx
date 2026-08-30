@@ -57,7 +57,16 @@ async function fetchShots(): Promise<{ shots: Shot[]; error: string | null }> {
       cache: "no-store",
       // Bounded, because an unreachable API would otherwise hold the page open until the
       // platform's own timeout and the board would look hung rather than disconnected.
-      signal: AbortSignal.timeout(8000),
+      //
+      // 8s was too tight and it showed. /api/shots answers in 1.7-2.5s warm, but the
+      // first request after an idle period also pays a container boot, an MCP handshake
+      // and two Prometheus range queries. A screenshot of the deployed board taken cold
+      // read "No shot data ... is unreachable (The operation was aborted due to
+      // timeout)" - the exact page a first-time visitor gets, and one that looks
+      // identical to a broken deployment. Cloud Run now keeps a warm instance so this
+      // should not arise; this bound is the backstop for when it does, set above the
+      // worst cold start rather than just above the warm one.
+      signal: AbortSignal.timeout(25000),
     });
     if (!response.ok) {
       return { shots: [], error: `${url} answered ${response.status}` };

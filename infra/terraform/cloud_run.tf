@@ -64,7 +64,14 @@ resource "google_cloud_run_v2_service" "api" {
     service_account = google_service_account.runtime.email
 
     scaling {
-      min_instance_count = 0
+      # One warm instance, not zero, and this is a demo decision rather than a
+      # performance one. Scaled to zero, the first request after an idle period pays a
+      # cold start: container boot, Python import, an MCP handshake and two Prometheus
+      # range queries. Measured warm, /api/shots answers in 1.7-2.5s; cold it exceeded
+      # the board's 8s fetch timeout, and the page a first-time visitor saw read
+      # "No shot data ... is unreachable". That is precisely the visitor whose opinion
+      # matters, and the failure is invisible to anyone who loads the page twice.
+      min_instance_count = 1
       max_instance_count = 3
     }
 
@@ -158,7 +165,14 @@ resource "google_cloud_run_v2_service" "web" {
     service_account = google_service_account.runtime.email
 
     scaling {
-      min_instance_count = 0
+      # One warm instance, not zero, and this is a demo decision rather than a
+      # performance one. Scaled to zero, the first request after an idle period pays a
+      # cold start: container boot, Python import, an MCP handshake and two Prometheus
+      # range queries. Measured warm, /api/shots answers in 1.7-2.5s; cold it exceeded
+      # the board's 8s fetch timeout, and the page a first-time visitor saw read
+      # "No shot data ... is unreachable". That is precisely the visitor whose opinion
+      # matters, and the failure is invisible to anyone who loads the page twice.
+      min_instance_count = 1
       max_instance_count = 3
     }
 
