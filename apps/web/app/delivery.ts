@@ -28,9 +28,27 @@ export function humanDuration(seconds: number): string {
  * `null` when there is nothing honest to say. That is the common case at the top of a
  * render and it must not be filled with a placeholder: a row reading "0m spare" when
  * nobody has estimated anything is a claim, and the wrong one.
+ *
+ * `landed` changes the tense, and it is not cosmetic. `Risk.MISSED` means the deadline
+ * passed with the shot UNFINISHED, so a shot that finished late is correctly rated
+ * ON_TRACK: it carries no delivery risk, because there is no longer anything to be late
+ * with. Left alone, that put a green pill directly above the words "24m late", which
+ * reads as a contradiction and invites a supervisor to distrust the pill.
+ *
+ * A finished shot is reported in the past tense as a fact about what happened, and an
+ * unfinished one in the present tense as a forecast about what will. Same number, two
+ * different claims, and the wording is what keeps them apart.
  */
-export function describeSlack(slackSeconds: number | null | undefined): string | null {
+export function describeSlack(
+  slackSeconds: number | null | undefined,
+  landed = false,
+): string | null {
   if (slackSeconds === null || slackSeconds === undefined) return null;
+  if (landed) {
+    return slackSeconds < 0
+      ? `delivered ${humanDuration(slackSeconds)} late`
+      : `delivered ${humanDuration(slackSeconds)} early`;
+  }
   if (slackSeconds < 0) return `${humanDuration(slackSeconds)} late`;
   return `${humanDuration(slackSeconds)} spare`;
 }

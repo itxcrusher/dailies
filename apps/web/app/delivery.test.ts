@@ -36,3 +36,16 @@ test("an absent eta formats to nothing rather than the epoch", () => {
   assert.equal(formatEta(undefined), null);
   assert.match(formatEta(1788100000) ?? "", /\d/);
 });
+
+test("a finished shot is described in the past tense", () => {
+  // Risk.MISSED means the deadline passed with the shot UNFINISHED, so a shot that
+  // finished late is correctly ON_TRACK: no delivery risk remains. Saying "24m late"
+  // under a green pill reads as a contradiction and makes the pill look wrong.
+  assert.equal(describeSlack(-24 * 60, true), "delivered 24m late");
+  assert.equal(describeSlack(2 * 3600, true), "delivered 2h early");
+});
+
+test("an unfinished shot is described as a forecast", () => {
+  assert.equal(describeSlack(-24 * 60, false), "24m late");
+  assert.equal(describeSlack(2 * 3600, false), "2h spare");
+});

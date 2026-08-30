@@ -195,7 +195,9 @@ function DiagnosisPanel({ shotId, diagnosis }: { shotId: string; diagnosis: Diag
 }
 
 function Delivery({ shot }: { shot: Shot }) {
-  const slack = describeSlack(shot.slack_seconds);
+  // frames_total 0 would make every empty shot look delivered, so it is excluded.
+  const landed = shot.frames_total > 0 && shot.frames_done >= shot.frames_total;
+  const slack = describeSlack(shot.slack_seconds, landed);
   const eta = formatEta(shot.eta_epoch);
   const caveat = describeConfidence(shot.confidence);
 
@@ -207,9 +209,11 @@ function Delivery({ shot }: { shot: Shot }) {
   return (
     <span className="delivery">
       {slack ? (
-        <span className={(shot.slack_seconds ?? 0) < 0 ? "slack late" : "slack"}>{slack}</span>
+        <span className={!landed && (shot.slack_seconds ?? 0) < 0 ? "slack late" : "slack"}>
+          {slack}
+        </span>
       ) : null}
-      {eta ? <span className="eta">ETA {eta}</span> : null}
+      {eta ? <span className="eta">{landed ? "finished" : "ETA"} {eta}</span> : null}
       {caveat ? <span className="caveat">{caveat}</span> : null}
     </span>
   );
