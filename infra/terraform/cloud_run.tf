@@ -288,12 +288,39 @@ resource "google_cloud_run_v2_job" "render" {
             }
           }
         }
+
+        # Where Blender writes. Pointed into the mounted bucket rather than /tmp, so a
+        # frame outlives the container that produced it and Visual QA has something to
+        # look at.
+        env {
+          name  = "DAILIES_OUTPUT"
+          value = "/frames/$${DAILIES_SHOT}/frame_####"
+        }
+
+        volume_mounts {
+          name       = "frames"
+          mount_path = "/frames"
+        }
+      }
+
+      # Cloud Storage FUSE rather than an upload step in the worker. Two reasons, and the
+      # second is the one that matters: there is no upload code to get wrong, and a render
+      # that is KILLED still leaves every frame it managed to write. An upload-at-the-end
+      # design loses exactly the partial render this project exists to reason about, and
+      # an upload-per-frame design is a second failure path inside the render loop.
+      volumes {
+        name = "frames"
+        gcs {
+          bucket    = google_storage_bucket.frames.name
+          read_only = false
+        }
       }
     }
   }
 
   depends_on = [
     google_secret_manager_secret_iam_member.runtime_grafana_otlp,
+    google_storage_bucket_iam_member.frames_runtime,
   ]
 }
 
