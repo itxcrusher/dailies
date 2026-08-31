@@ -10,6 +10,8 @@ Dailies is an AI reliability layer that catches that from telemetry, before anyo
 
 **Live:** <https://dailies-web-3tc7ky4kha-uc.a.run.app>
 
+**Dashboard:** <https://politebamboo549.grafana.net/public-dashboards/2f36b669818743dcbe8d195b79175af9> - the render pipeline and, underneath it, the agent that reads the render pipeline. No login.
+
 ## The failure this exists for
 
 This is not a hypothetical. It is how render farms describe their own worst day:
@@ -103,7 +105,7 @@ That test could not fail on a developer machine. A workstation has been up for d
 
 Every panel wraps its metric in `last_over_time(m[$__range])` rather than querying it bare, and that is not a style preference. Prometheus answers an instant query only from a sample inside its five-minute staleness window, and a render that finished an hour ago has none: measured on this stack, `render_job_frames_expected` returns 6 series over a 24h range and **0** as an instant query. Bare metrics would have produced a dashboard that is correct during a render and empty the rest of the time, which is the worst of the two, because it looks right exactly when someone is testing it.
 
-`dashboards/publish.py` runs every panel's own query before uploading and refuses to publish one that would render as an empty chart. A dashboard is the one artefact where being wrong is invisible: a query against a metric that does not exist draws the same picture as a quiet pipeline. That guard is tested by pointing a panel at a metric that does not exist and confirming the publish is refused.
+It is public, so it needs no Grafana account to read. `dashboards/publish.py` runs every panel's own query before uploading and refuses to publish one that would render as an empty chart. A dashboard is the one artefact where being wrong is invisible: a query against a metric that does not exist draws the same picture as a quiet pipeline. That guard is tested by pointing a panel at a metric that does not exist and confirming the publish is refused.
 
 ## Licence
 
