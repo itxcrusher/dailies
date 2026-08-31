@@ -10,13 +10,14 @@ which is a real decision with a real wrong answer.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-__all__ = ["Frame", "bucket_name", "latest_frame", "newest_of"]
+__all__ = ["Frame", "bucket_name", "gcs_reader", "latest_frame", "newest_of"]
 
 _log = logging.getLogger(__name__)
 
@@ -80,3 +81,37 @@ async def latest_frame(
         _log.info("No frames for %s; nothing to look at", shot)
         return None
     return Frame(path=newest, data=await read_object(newest))
+
+
+def gcs_reader(
+    bucket: str,
+) -> tuple[Callable[[str], Awaitable[list[str]]], Callable[[str], Awaitable[bytes]]]:
+    """The production listing and read, against Cloud Storage.
+
+    Returns the two callables :func:`latest_frame` takes, so the seam stays injectable
+    and this is the only place that knows about buckets.
+
+    ``google.cloud.storage`` is synchronous, so both calls are pushed to a thread. A
+    blocking read inside the event loop would stall every other request on the instance,
+    and the frames here are a megabyte each over a network.
+
+    Imported inside the function for the same reason the ADK is: the read-only board
+    routes must stay importable on an install without the ``agent`` extra.
+    """
+    from google.cloud import storage
+
+    client = storage.Client()
+
+    async def list_objects(prefix: str) -> list[str]:
+        def _list() -> list[str]:
+            return [b.name for b in client.list_blobs(bucket, prefix=prefix)]
+
+        return await asyncio.to_thread(_list)
+
+    async def read_object(name: str) -> bytes:
+        def _read() -> bytes:
+            return client.bucket(bucket).blob(name).download_as_bytes()
+
+        return await asyncio.to_thread(_read)
+
+    return list_objects, read_object

@@ -195,6 +195,52 @@ def build_shot_source(env: Mapping[str, str] | None = None) -> ShotSource | None
 DIAGNOSIS_COOLDOWN_SECONDS = 300
 
 
+class Inspect(Protocol):
+    """Looks at a shot's most recent frame and returns a verdict, or None."""
+
+    async def __call__(self, shot_id: str) -> dict[str, Any] | None: ...
+
+
+def build_inspector():
+    """The visual check reading the real bucket, or None when there is no bucket.
+
+    None rather than a stub, so a deployment without frames simply has no visual verdict
+    instead of an empty one. An empty verdict on the board would read as "we looked and
+    saw nothing wrong", which is a claim, and the opposite of the truth.
+    """
+    try:
+        from dailies_api.frames import bucket_name, gcs_reader, latest_frame
+        from dailies_api.investigation import shot_label
+        from dailies_api.visual_qa import check_frame, gemini_vision
+
+        bucket = bucket_name()
+        if not bucket:
+            _log.info("No frames bucket configured; the visual check is off")
+            return None
+
+        from dailies_api.agent import INVESTIGATOR_MODEL
+
+        model = gemini_vision(INVESTIGATOR_MODEL)
+        list_objects, read_object = gcs_reader(bucket)
+
+        async def inspect(shot_id: str) -> dict[str, Any] | None:
+            frame = await latest_frame(
+                shot_label(shot_id), list_objects=list_objects, read_object=read_object
+            )
+            if frame is None:
+                return None
+            verdict = await check_frame(
+                frame.data, shot=shot_label(shot_id), model=model, path=frame.path
+            )
+            # The frame it judged, so a person can open the same image and disagree.
+            return {**verdict, "frame": frame.path}
+
+        return inspect
+    except Exception:  # noqa: BLE001 - observability must never break the API
+        _log.exception("Could not set up the visual check; continuing without it")
+        return None
+
+
 def cors_origins(env: Mapping[str, str] | None = None) -> list[str]:
     """The browser origins allowed to read the board.
 
@@ -257,6 +303,7 @@ def create_app(
     *,
     allow_origins: Sequence[str] | None = None,
     diagnose: Diagnose | None = None,
+    inspect: Inspect | None = None,
     shot_source: ShotSource | None = None,
 ) -> FastAPI:
     """Build the board API over ``store``.
@@ -273,6 +320,10 @@ def create_app(
             module-global for the same reason ``store`` is: two apps in one process must
             not share it, and a test must not have to reach production to exercise a
             route.
+        inspect: What looks at a shot's most recent frame, returning a visual verdict or
+            None when there is no frame. Omit it and one is built from the environment
+            when a frames bucket is configured. A separate seam from ``diagnose`` because
+            they are independent sources and must fail independently.
         shot_source: Where the board's rows come from. Omit it and one is built from the
             environment when the deployment can reach Grafana, so the board populates
             itself from telemetry; pass one to serve a fixed list without a network.
@@ -288,6 +339,7 @@ def create_app(
     # building the default here rather than per request means an unconfigured deployment
     # does not re-read the environment on every page load to reach the same conclusion.
     source = build_shot_source() if shot_source is None else shot_source
+    look = build_inspector() if inspect is None else inspect
     # Per-app, never module-global, for the same reason the store is: two apps in one
     # process must not share a cooldown clock or a lock table.
     diagnosed_at: dict[str, float] = {}
@@ -385,7 +437,9 @@ def create_app(
             held = shots.get(found.id)
             # Keep the fields telemetry cannot speak to, take the ones it owns.
             shots.upsert(
-                rated if held is None else rated.model_copy(update={"diagnosis": held.diagnosis})
+                rated
+                if held is None
+                else rated.model_copy(update={"diagnosis": held.diagnosis, "visual": held.visual})
             )
 
     @app.get("/api/shots", response_model=ShotList, tags=["shots"])
@@ -541,8 +595,21 @@ def create_app(
             # minutes, and frames land during it. Writing back the copy taken at the start
             # would roll frames_done and risk back to where they were when the button was
             # pressed.
+            # Independent of the investigation and after it, so a bucket permission
+            # problem or a vision quota error cannot turn a successful diagnosis into a
+            # 502. The supervisor still gets the answer that worked, and the board says
+            # nothing rather than something reassuring about the frame.
+            visual: dict[str, Any] | None = None
+            if look is not None:
+                try:
+                    visual = await look(shot_id)
+                except Exception:  # noqa: BLE001 - see above; corroboration, not a gate
+                    _log.exception("The visual check failed for %s; keeping the diagnosis", shot_id)
+
             current = shots.get(shot_id) or shot
-            stored = shots.upsert(current.model_copy(update={"diagnosis": diagnosis}))
+            stored = shots.upsert(
+                current.model_copy(update={"diagnosis": diagnosis, "visual": visual})
+            )
             # Stamped only on success. A failed investigation must stay retryable at
             # once: a 502 that also started a five-minute cooldown would leave a
             # transient Grafana outage looking like a permanently broken button.

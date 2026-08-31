@@ -6,7 +6,6 @@ forty, and what happens when there are none.
 """
 
 import pytest
-
 from dailies_api.frames import latest_frame, newest_of
 
 

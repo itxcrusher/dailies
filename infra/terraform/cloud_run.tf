@@ -109,7 +109,10 @@ resource "google_cloud_run_v2_service" "api" {
       # fail: a valid-but-wrong UID answers about a different datasource.
       dynamic "env" {
         for_each = merge(local.grafana_env, local.vertex_env, local.otlp_env, {
-          DAILIES_CORS_ORIGINS   = var.cors_origins
+          DAILIES_CORS_ORIGINS = var.cors_origins
+          # The API reads frames from here to show Gemini. Absent means the visual check
+          # is simply off, rather than on and silently returning nothing.
+          DAILIES_FRAMES_BUCKET  = google_storage_bucket.frames.name
           DAILIES_MCP_URL        = google_cloud_run_v2_service.mcp_grafana.uri
           DAILIES_PROMETHEUS_UID = var.prometheus_datasource_uid
           DAILIES_LOKI_UID       = var.loki_datasource_uid

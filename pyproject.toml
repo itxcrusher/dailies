@@ -37,7 +37,13 @@ dev = ["pytest>=8.3", "pytest-asyncio>=0.24", "ruff>=0.7", "httpx>=0.27"]
 # unlocked `pip install ".[agent]"`, so an unbounded floor lets a major release change the
 # container without changing this repo, and nothing in the suite drives the ADK surface
 # `run_agent` uses (InMemoryRunner, session_service.create_session, event.is_final_response).
-agent = ["google-adk>=1.20,<2", "mcp>=1.2", "httpx>=0.27"]
+agent = ["google-adk>=1.20,<2",
+    # Declared rather than relied on transitively. Both arrive today under google-adk, and
+    # depending on a transitive import is what cost this project an entire render when the
+    # OTel SDK moved LogRecord between versions: it passed locally and died in the
+    # container. Visual QA imports both directly, so both are named here.
+    "google-cloud-storage>=2.18,<4",
+    "google-genai>=1.0,<2", "mcp>=1.2", "httpx>=0.27"]
 
 [tool.setuptools.packages.find]
 where = ["packages/telemetry", "packages/render", "packages/graph", "apps/api"]

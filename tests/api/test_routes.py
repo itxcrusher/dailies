@@ -108,6 +108,9 @@ def test_shot_detail_returns_the_stored_shot():
         "frames_done": 96,
         "risk": "CRITICAL",
         "diagnosis": {"cause": "worker OOM"},
+        # Held beside the diagnosis, not inside it: two independent sources, and the
+        # interesting case is when they disagree.
+        "visual": None,
         # Delivery fields default to absent rather than zero. A shot handed straight to
         # the store has not been rated, and "not known" is not "on the wire with no time
         # left", which is what zeros here would claim.

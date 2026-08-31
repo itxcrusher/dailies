@@ -27,6 +27,7 @@ report a disagreement between sources rather than quietly pick the more alarming
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from collections.abc import Awaitable, Callable
@@ -38,6 +39,7 @@ __all__ = [
     "VisualCheckFailed",
     "build_visual_prompt",
     "check_frame",
+    "gemini_vision",
     "mime_for",
     "parse_verdict",
 ]
@@ -264,3 +266,45 @@ async def check_frame(
         prompt=build_visual_prompt(shot),
     )
     return parse_verdict(answer)
+
+
+def gemini_vision(model: str) -> VisualModel:
+    """The production model call: Gemini multimodal on Vertex.
+
+    Returns the callable :func:`check_frame` takes, so the seam stays injectable and this
+    is the only place that knows about the SDK.
+
+    ``temperature=0`` because this is a measurement rather than a piece of writing. Two
+    runs over the same frame should agree, and a verdict that moves between "correct" and
+    "suspect" on re-roll is not evidence a supervisor can act on.
+
+    The response is constrained to the schema by the SDK rather than only asked for in
+    prose, so a refusal in :func:`parse_verdict` means the model genuinely could not
+    answer rather than that it wrapped its JSON in a sentence.
+    """
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client()
+
+    async def call(*, image: bytes, mime_type: str, instruction: str, prompt: str) -> str:
+        def _generate() -> str:
+            response = client.models.generate_content(
+                model=model,
+                contents=[
+                    types.Part.from_bytes(data=image, mime_type=mime_type),
+                    types.Part.from_text(text=prompt),
+                ],
+                config=types.GenerateContentConfig(
+                    system_instruction=instruction,
+                    temperature=0,
+                    response_mime_type="application/json",
+                ),
+            )
+            return response.text or ""
+
+        # The SDK is synchronous and a vision call takes seconds; blocking the loop would
+        # stall every other request on the instance for the duration.
+        return await asyncio.to_thread(_generate)
+
+    return call

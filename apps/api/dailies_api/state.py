@@ -130,6 +130,16 @@ class Shot(BaseModel):
             "investigator's diagnosis; the two share a word and measure different things."
         ),
     )
+    visual: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "What Gemini saw when it looked at this shot's most recent frame, or None if "
+            "nobody has looked. Held beside the diagnosis rather than inside it, because "
+            "they are two independent sources and the interesting case is when they "
+            "disagree: a picture that looks fine beside a log saying an asset was missing "
+            "is a real finding, and folding one into the other would hide it."
+        ),
+    )
     diagnosis: dict[str, Any] | None = Field(
         default=None,
         description=(
