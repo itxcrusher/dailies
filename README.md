@@ -99,6 +99,25 @@ A second class of defect cost as much and looks nothing like the first. The cool
 
 That test could not fail on a developer machine. A workstation has been up for days, so the same code computes an age of several hundred thousand seconds and sails past the cooldown; the bug existed only where the clock was young. It fails now because the clock is an input to the test rather than an ambient fact, which is the general form of the fix: **the environment a test runs in is part of the test, whether or not it is written down.**
 
+## What the agent scores
+
+`python -m dailies_api.evals.harness`, or `gcloud run jobs execute dailies-evals`. Four scenarios, each telemetry with a known answer. Only the network is faked: above the replayed session sit the real MCP wrapper, the real tool routing, the real prompt, a real Gemini call and the real schema validation.
+
+```
+scenario            verdict cause evidence honest
+missing_texture      pass   pass   pass      -      4 queries
+clean_render         pass    -     pass      -      3 queries
+stalled_no_errors    pass   pass   pass      -      4 queries
+no_telemetry          -     pass   pass     pass    4 queries
+4/4
+```
+
+One run. A model is sampled, not measured, so that is what happened rather than a rate.
+
+The fixtures are captured from the live stack, not written. An invented fixture encodes what its author believes the farm emits, so an eval built on one scores the agent against that belief. SH200's fixture has **no log lines at all**, because a healthy render is silent and reading silence as a broken query is this repo's recurring failure.
+
+`no_telemetry` is the case the harness exists for, and it found a real defect. Every query returns empty, and the agent's first answer was *"the render for shot SH999 completed successfully without any logged errors"*. It invented no fault, so it passed the fabrication check, and it still asserted an outcome from an empty result. That is this project's own thesis facing the other way, and the more dangerous direction: a supervisor told about a fault that is not there wastes a minute, while one told a broken shot is fine stops looking. The instruction now says to report that the telemetry could not be read and never that the render completed cleanly, and the scenario requires the honest answer rather than merely forbidding the invented one.
+
 ## The dashboard
 
 `dashboards/dailies.json` is one dashboard in two halves, which is the point: the render farm on top, and underneath it the Gemini agent that reads the render farm. An agent trusted with a deadline is itself a pipeline, and one nobody can observe is one nobody should trust.
