@@ -92,6 +92,10 @@ The parser is where render-domain knowledge lives. It is pure, and it carries th
 
 Every one produced **an empty result rather than an error**. That is the lesson worth carrying out of this repo, and it is why the agent is told, in its instructions, that an empty result on this stack is far more often a defect in the query than an absence in the data.
 
+A second class of defect cost as much and looks nothing like the first. The cooldown that stops the public Diagnose button from being a free Vertex tap read a missing entry as `0.0`, and `0.0` on a monotonic clock is not a moment long past. It is the clock's origin, and the origin is per sandbox. A freshly started Cloud Run instance is seconds old, so every shot restored from storage sat inside a five-minute cooldown and the service refused to diagnose anything for the first five minutes after each cold start, which is the normal path for a visitor arriving at a service that has scaled to zero.
+
+That test could not fail on a developer machine. A workstation has been up for days, so the same code computes an age of several hundred thousand seconds and sails past the cooldown; the bug existed only where the clock was young. It fails now because the clock is an input to the test rather than an ambient fact, which is the general form of the fix: **the environment a test runs in is part of the test, whether or not it is written down.**
+
 ## Licence
 
 Apache-2.0.
