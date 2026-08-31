@@ -98,3 +98,66 @@ async def test_two_simultaneous_presses_run_one_investigation():
 
     assert all(r.status_code == 200 for r in responses)
     assert started == 1, "a second press while one is in flight must not start another"
+
+
+# --- an incomplete answer must not be cached -----------------------------------------
+#
+# Found by turning the logs on. SH201's visual check failed once, the route still
+# returned 200 with a diagnosis, and the cooldown stamped that as a success. For the next
+# five minutes every press replayed the stale answer, so the visual check never ran again
+# and the shot looked permanently broken. Every "consistent failure" being investigated
+# was one old bad answer being handed back.
+#
+# The cooldown exists to stop a supervisor spending a Vertex call on a question already
+# answered. An answer missing half of itself is not one.
+
+
+def test_an_answer_with_no_visual_verdict_is_not_cached():
+    calls: list[str] = []
+
+    async def diagnoser(shot_id: str) -> dict:
+        calls.append(shot_id)
+        return DIAGNOSIS
+
+    async def failed_look(shot_id: str):
+        return None
+
+    client = TestClient(
+        create_app(store_with(), diagnose=counting_diagnoser(calls), inspect=failed_look)
+    )
+    url = "/api/shots/dailies:SEQ01:SH030:job-7/diagnose"
+
+    client.post(url)
+    client.post(url)
+
+    assert len(calls) == 2, "an incomplete answer must be retried, not served from the cooldown"
+
+
+def test_a_complete_answer_is_still_cached():
+    """The cooldown must keep doing its job for answers that are actually whole."""
+    calls: list[str] = []
+
+    async def good_look(shot_id: str) -> dict:
+        return {"verdict": "suspect", "observation": "a magenta cube", "confidence": "high"}
+
+    client = TestClient(
+        create_app(store_with(), diagnose=counting_diagnoser(calls), inspect=good_look)
+    )
+    url = "/api/shots/dailies:SEQ01:SH030:job-7/diagnose"
+
+    client.post(url)
+    client.post(url)
+
+    assert len(calls) == 1, "a whole answer should not be recomputed"
+
+
+def test_with_no_visual_checker_a_diagnosis_alone_is_complete():
+    """A deployment with no frames bucket is not permanently uncacheable."""
+    calls: list[str] = []
+    client = TestClient(create_app(store_with(), diagnose=counting_diagnoser(calls), inspect=None))
+    url = "/api/shots/dailies:SEQ01:SH030:job-7/diagnose"
+
+    client.post(url)
+    client.post(url)
+
+    assert len(calls) == 1

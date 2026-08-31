@@ -629,7 +629,18 @@ def create_app(
             # behind a running investigation arrives here with the answer already
             # stored, and re-running would defeat the guard it just waited on.
             held = shots.get(shot_id)
-            if held is not None and held.diagnosis is not None:
+            # "Complete" means every check that COULD have answered did. A previous
+            # attempt whose visual check failed left a diagnosis with no verdict beside
+            # it, and serving that for five minutes meant the visual check never ran
+            # again and the shot looked permanently broken. The cooldown exists to save a
+            # supervisor a Vertex call on a question already answered; an answer missing
+            # half of itself is not one.
+            complete = (
+                held is not None
+                and held.diagnosis is not None
+                and (look is None or held.visual is not None)
+            )
+            if complete:
                 age = time.monotonic() - diagnosed_at.get(shot_id, 0.0)
                 if age < DIAGNOSIS_COOLDOWN_SECONDS:
                     _log.info(
@@ -697,10 +708,14 @@ def create_app(
                 # convenience; failing to write must never cost the supervisor the
                 # answer they are looking at.
                 await kept.save(shot_id, diagnosis=diagnosis, visual=visual)
-            # Stamped only on success. A failed investigation must stay retryable at
-            # once: a 502 that also started a five-minute cooldown would leave a
-            # transient Grafana outage looking like a permanently broken button.
-            diagnosed_at[shot_id] = time.monotonic()
+            # Stamped only on a COMPLETE success. A failed investigation must stay
+            # retryable at once: a 502 that also started a five-minute cooldown would
+            # leave a transient Grafana outage looking like a permanently broken button.
+            # And a diagnosis whose visual check failed is not a success worth caching,
+            # for the same reason - it would pin the half-answer in place until it aged
+            # out, which is exactly what happened to SH201 in production.
+            if look is None or visual is not None:
+                diagnosed_at[shot_id] = time.monotonic()
             return stored
 
     return app
