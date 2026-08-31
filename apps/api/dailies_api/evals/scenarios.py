@@ -40,16 +40,23 @@ _EMPTY_PROM: dict[str, Any] = {"status": "success", "data": {"resultType": "matr
 _EMPTY_LOKI: dict[str, Any] = {"status": "success", "data": {"resultType": "streams", "result": []}}
 
 
-def _stalled(source: dict[str, Any], value: str) -> dict[str, Any]:
-    """The completed-frames response with the count rewritten.
+def _stalled(source: dict[str, Any], value: str, *, shot: str) -> dict[str, Any]:
+    """The frames response with the count rewritten and the shot relabelled.
 
     Derived from real telemetry rather than composed from nothing, so the labels, the
     instance ids and the shape are all still the farm's own.
+
+    ``shot`` is not optional, and the first version of this function is why. It rewrote the
+    counts and left the ``shot`` label reading SH201 while the scenario asked about SH210,
+    so the agent queried one shot and was handed another's series. It noticed, reported
+    that the telemetry could not be trusted, and was marked wrong for it. The fixture was
+    the defect; the agent was the only party behaving correctly.
     """
     import copy
 
     out = copy.deepcopy(source)
     for series in out["data"]["result"]:
+        series["metric"]["shot"] = shot
         series["values"] = [[stamp, value] for stamp, _ in series["values"]]
     return out
 
@@ -119,8 +126,8 @@ SCENARIOS: tuple[Scenario, ...] = (
             "nothing is in the logs; the shortfall is only visible in the arithmetic "
             "between two metrics."
         ),
-        prom_expected=_stalled(SH201_EXPECTED, "40"),
-        prom_completed=_stalled(SH201_COMPLETED, "17"),
+        prom_expected=_stalled(SH201_EXPECTED, "40", shot="SH210"),
+        prom_completed=_stalled(SH201_COMPLETED, "17", shot="SH210"),
         logs=_EMPTY_LOKI,
         expect_problem=True,
         cause_must_mention=("frame", "incomplete", "17", "40", "stall", "not complete"),
