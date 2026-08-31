@@ -201,6 +201,27 @@ class Inspect(Protocol):
     async def __call__(self, shot_id: str) -> dict[str, Any] | None: ...
 
 
+def build_answer_store():
+    """Where answers are kept across restarts, or None when there is no bucket.
+
+    None rather than an in-memory stand-in, so a deployment without storage forgets
+    visibly rather than appearing to remember and losing everything on the next deploy.
+    """
+    try:
+        from dailies_api.answers import AnswerStore
+        from dailies_api.frames import bucket_name, gcs_answer_io
+
+        bucket = bucket_name()
+        if not bucket:
+            _log.info("No bucket configured; answers will not survive a restart")
+            return None
+        write_object, read_object = gcs_answer_io(bucket)
+        return AnswerStore(write_object=write_object, read_object=read_object)
+    except Exception:  # noqa: BLE001 - storage setup must never break the API
+        _log.exception("Could not set up the answer store; continuing without it")
+        return None
+
+
 def build_inspector():
     """The visual check reading the real bucket, or None when there is no bucket.
 
@@ -305,6 +326,7 @@ def create_app(
     diagnose: Diagnose | None = None,
     inspect: Inspect | None = None,
     shot_source: ShotSource | None = None,
+    answers: Any = None,
 ) -> FastAPI:
     """Build the board API over ``store``.
 
@@ -324,6 +346,10 @@ def create_app(
             None when there is no frame. Omit it and one is built from the environment
             when a frames bucket is configured. A separate seam from ``diagnose`` because
             they are independent sources and must fail independently.
+        answers: Where diagnoses and visual verdicts are kept so they survive a restart.
+            Omit it and one is built from the environment when a bucket is configured.
+            None means the board forgets on every deploy, which a local run may well
+            want and a judge opening the hosted URL certainly does not.
         shot_source: Where the board's rows come from. Omit it and one is built from the
             environment when the deployment can reach Grafana, so the board populates
             itself from telemetry; pass one to serve a fixed list without a network.
@@ -340,6 +366,7 @@ def create_app(
     # does not re-read the environment on every page load to reach the same conclusion.
     source = build_shot_source() if shot_source is None else shot_source
     look = build_inspector() if inspect is None else inspect
+    kept = build_answer_store() if answers is None else answers
     # Per-app, never module-global, for the same reason the store is: two apps in one
     # process must not share a cooldown clock or a lock table.
     diagnosed_at: dict[str, float] = {}
@@ -435,6 +462,19 @@ def create_app(
         for found in discovered:
             rated = rate(found, detail.get(found.id))
             held = shots.get(found.id)
+
+            # Nothing in memory for this shot, so look for what a previous instance
+            # concluded. Only then: what is in memory is newer than what is in the
+            # bucket, and reading over it would replay a stale answer.
+            if kept is not None and (held is None or held.diagnosis is None):
+                previous = await kept.load(found.id)
+                if previous:
+                    rated = rated.model_copy(
+                        update={
+                            "diagnosis": previous.get("diagnosis"),
+                            "visual": previous.get("visual"),
+                        }
+                    )
             # Keep the fields telemetry cannot speak to, take the ones it owns.
             shots.upsert(
                 rated
@@ -610,6 +650,11 @@ def create_app(
             stored = shots.upsert(
                 current.model_copy(update={"diagnosis": diagnosis, "visual": visual})
             )
+            if kept is not None:
+                # After the upsert, and best-effort inside AnswerStore. Persisting is a
+                # convenience; failing to write must never cost the supervisor the
+                # answer they are looking at.
+                await kept.save(shot_id, diagnosis=diagnosis, visual=visual)
             # Stamped only on success. A failed investigation must stay retryable at
             # once: a 502 that also started a five-minute cooldown would leave a
             # transient Grafana outage looking like a permanently broken button.

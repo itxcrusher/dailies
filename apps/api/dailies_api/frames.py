@@ -17,7 +17,15 @@ import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-__all__ = ["Frame", "bucket_name", "gcs_reader", "is_frame", "latest_frame", "newest_of"]
+__all__ = [
+    "Frame",
+    "bucket_name",
+    "gcs_answer_io",
+    "gcs_reader",
+    "is_frame",
+    "latest_frame",
+    "newest_of",
+]
 
 _log = logging.getLogger(__name__)
 
@@ -145,3 +153,38 @@ def gcs_reader(
         return await asyncio.to_thread(_read)
 
     return list_objects, read_object
+
+
+def gcs_answer_io(
+    bucket: str,
+) -> tuple[Callable[[str, bytes], Awaitable[None]], Callable[[str], Awaitable[bytes | None]]]:
+    """Write and read the stored answers, against the same bucket the frames live in.
+
+    Separate from :func:`gcs_reader` because the read here returns ``None`` for a missing
+    object rather than raising. A shot nobody has asked about is the ordinary case, not
+    an error, and making the caller catch NotFound to express that would put the normal
+    path in an exception handler.
+    """
+    from google.cloud import storage
+    from google.cloud.exceptions import NotFound
+
+    client = storage.Client()
+
+    async def write_object(name: str, data: bytes) -> None:
+        def _write() -> None:
+            client.bucket(bucket).blob(name).upload_from_string(
+                data, content_type="application/json"
+            )
+
+        await asyncio.to_thread(_write)
+
+    async def read_object(name: str) -> bytes | None:
+        def _read() -> bytes | None:
+            try:
+                return client.bucket(bucket).blob(name).download_as_bytes()
+            except NotFound:
+                return None
+
+        return await asyncio.to_thread(_read)
+
+    return write_object, read_object
