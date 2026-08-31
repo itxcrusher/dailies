@@ -87,6 +87,11 @@ def test_diagnosis_schema_evidence_entries_name_the_query_and_the_finding():
 def _diagnosis(**overrides):
     answer = {
         "shot": "SH040",
+        # Required since the board began comparing this verdict against the visual one.
+        # A diagnosis exists for every shot anyone asked about, including healthy ones,
+        # so nothing else in the answer distinguishes "nothing wrong" from "here is what
+        # is wrong".
+        "problem_found": True,
         "cause": "The renderer ran out of GPU memory on the heaviest frames.",
         "evidence": [
             {

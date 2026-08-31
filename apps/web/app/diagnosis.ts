@@ -37,6 +37,17 @@ export type EvidenceEntry = {
 };
 
 export type Diagnosis = {
+  /**
+   * Whether the investigator said it actually found something wrong.
+   *
+   * `null` when the answer did not say. Not defaulted either way: a diagnosis exists for
+   * every shot anyone asked about, including healthy ones, so assuming false would put a
+   * clean reading on an answer that never made one, and assuming true would redden a
+   * shot nobody called broken. The board compares this against the visual verdict, and
+   * it once inferred the value from "a diagnosis exists", which announced every healthy
+   * shot as a disagreement between sources.
+   */
+  problemFound: boolean | null;
   cause: string;
   evidence: EvidenceEntry[];
   confidence: Confidence | null;
@@ -95,6 +106,7 @@ export function normalizeDiagnosis(raw: unknown): Diagnosis | null {
   }
   const source = raw as Record<string, unknown>;
   const diagnosis: Diagnosis = {
+    problemFound: typeof source.problem_found === "boolean" ? source.problem_found : null,
     cause: text(source.cause),
     evidence: evidenceOf(source.evidence),
     confidence: confidenceOf(source.confidence),

@@ -48,23 +48,32 @@ export type Agreement = "agree_problem" | "agree_clean" | "disagree" | null;
  * it is the only outcome here that tells a supervisor something neither check could have
  * told them alone.
  */
-export function agreement(hasDiagnosis: boolean, visual: Visual | null): Agreement {
-  if (!visual || !hasDiagnosis) return null;
+export function agreement(
+  telemetryFoundProblem: boolean | null,
+  visual: Visual | null,
+): Agreement {
+  // Both sides must have actually spoken. `null` means the investigator did not say
+  // whether it found a problem, and an answer that did not say is not one to compare
+  // against - inferring it from the presence of a diagnosis is precisely the bug this
+  // signature exists to prevent.
+  if (!visual || telemetryFoundProblem === null) return null;
+
   const visualUnhappy = visual.verdict !== "looks_correct";
-  // The telemetry side is coarse on purpose: the investigator is only asked when someone
-  // suspects a problem, so a diagnosis existing is not itself a claim that one was found.
-  // What can be compared honestly is whether the FRAME looks wrong, against whether the
-  // diagnosis reported a cause.
-  return visualUnhappy ? "agree_problem" : "disagree";
+  if (telemetryFoundProblem && visualUnhappy) return "agree_problem";
+  if (!telemetryFoundProblem && !visualUnhappy) return "agree_clean";
+  return "disagree";
 }
 
 /** One sentence naming the relationship, for the reader who will not diff two paragraphs. */
 export function agreementNote(state: Agreement): string | null {
   if (state === "agree_problem") {
-    return "Both sources agree: the telemetry found a cause and the frame looks wrong.";
+    return "Both sources agree: the telemetry found a problem and the frame looks wrong.";
+  }
+  if (state === "agree_clean") {
+    return "Both sources agree: nothing wrong in the telemetry, and the frame looks correct.";
   }
   if (state === "disagree") {
-    return "The sources disagree. The telemetry reported a cause, and the frame looks correct. Worth a human eye on both before acting.";
+    return "The sources disagree. One found a problem the other did not. Worth a human eye on both before acting.";
   }
   return null;
 }

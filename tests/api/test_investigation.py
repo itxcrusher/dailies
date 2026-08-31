@@ -21,6 +21,7 @@ from dailies_api.investigation import (
 
 GOOD = {
     "shot": "SH030",
+    "problem_found": True,
     "cause": "Blender could not open jacket_diffuse.exr, so the frame rendered untextured.",
     "evidence": [
         {
@@ -176,3 +177,78 @@ def test_a_bad_answer_carries_what_the_model_actually_said():
 async def test_a_bad_answer_fails_the_diagnosis_rather_than_storing_it():
     with pytest.raises(InvestigationFailed):
         await diagnoser(FakeSession(), answer="no idea")("SH030")
+
+
+# --- did it actually find a problem? -------------------------------------------------
+#
+# The board compares the telemetry verdict against the visual one and tells a supervisor
+# whether the two agree. That comparison was wrong on the deployed system: it treated
+# "a diagnosis exists" as "the telemetry found a problem", so a clean shot with a clean
+# frame was announced, in yellow, as a DISAGREEMENT between sources.
+#
+# A diagnosis exists for every shot anyone asked about, including the healthy ones. The
+# investigator has to say whether it found something, because nothing else in the answer
+# distinguishes "no problem" from "a problem I am describing".
+
+
+def test_the_schema_requires_the_investigator_to_say_whether_it_found_a_problem():
+    from dailies_api.agent import DIAGNOSIS_SCHEMA
+
+    assert "problem_found" in DIAGNOSIS_SCHEMA["required"]
+    assert DIAGNOSIS_SCHEMA["properties"]["problem_found"]["type"] == "boolean"
+
+
+def test_a_diagnosis_carries_the_flag_through():
+    from dailies_api.investigation import parse_diagnosis
+
+    answer = json.dumps(
+        {
+            "shot": "SH201",
+            "problem_found": True,
+            "cause": "a required asset was missing",
+            "evidence": [{"query": "q", "finding": "f"}],
+            "confidence": "high",
+        }
+    )
+    assert parse_diagnosis(answer, "SH201")["problem_found"] is True
+
+
+def test_a_clean_finding_is_carried_through_as_false():
+    """The case that was being misreported, pinned."""
+    from dailies_api.investigation import parse_diagnosis
+
+    answer = json.dumps(
+        {
+            "shot": "SH200",
+            "problem_found": False,
+            "cause": "the render completed with no errors reported",
+            "evidence": [{"query": "q", "finding": "f"}],
+            "confidence": "high",
+        }
+    )
+    assert parse_diagnosis(answer, "SH200")["problem_found"] is False
+
+
+def test_an_answer_without_the_flag_is_refused():
+    """Refused, not defaulted, and the consistency matters more than the convenience.
+
+    Defaulting a missing flag to False would put a clean reading on an answer that never
+    made one, which is the same class of invention the evidence rule exists to prevent.
+    Defaulting it to True would redden a shot nobody said was broken. There is no honest
+    default for "did you find a problem", so an answer that does not say is not one.
+
+    My first version of this test asserted the flag should carry through as None, which
+    contradicts how every other required field in this schema is treated.
+    """
+    from dailies_api.investigation import InvestigationFailed, parse_diagnosis
+
+    answer = json.dumps(
+        {
+            "shot": "SH200",
+            "cause": "something",
+            "evidence": [{"query": "q", "finding": "f"}],
+            "confidence": "high",
+        }
+    )
+    with pytest.raises(InvestigationFailed):
+        parse_diagnosis(answer, "SH200")

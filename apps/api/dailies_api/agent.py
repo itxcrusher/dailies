@@ -129,9 +129,18 @@ GRAFANA_MCP_TOOLS = frozenset(
 #: ``cause``.
 DIAGNOSIS_SCHEMA: dict[str, Any] = {
     "type": "object",
-    "required": ["shot", "cause", "evidence", "confidence"],
+    "required": ["shot", "problem_found", "cause", "evidence", "confidence"],
     "properties": {
         "shot": {"type": "string"},
+        "problem_found": {
+            "type": "boolean",
+            "description": (
+                "Whether you actually found something wrong with this shot. False is a "
+                "real and common answer: most shots are fine, and you are asked about "
+                "healthy ones too. This is not implied by the presence of a cause, "
+                "because a cause is also written for a shot that turned out clean."
+            ),
+        },
         "cause": {"type": "string", "description": "One sentence naming the root cause"},
         "evidence": {
             "type": "array",

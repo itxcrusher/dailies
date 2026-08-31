@@ -116,8 +116,14 @@ function Report({ shotId, diagnosis }: { shotId: string; diagnosis: Diagnosis })
  * will not diff two paragraphs, and a clean-looking frame beside a reported cause is
  * the one result neither check could have produced alone.
  */
-function VisualPanel({ visual, hasDiagnosis }: { visual: Visual; hasDiagnosis: boolean }) {
-  const state = agreement(hasDiagnosis, visual);
+function VisualPanel({
+  visual,
+  telemetryFoundProblem,
+}: {
+  visual: Visual;
+  telemetryFoundProblem: boolean | null;
+}) {
+  const state = agreement(telemetryFoundProblem, visual);
   const note = agreementNote(state);
   return (
     <section className="visual" aria-label="What the frame shows">
@@ -239,7 +245,12 @@ export default async function Board() {
               return (
                 <div key={shot.id}>
                   <Report shotId={shot.id} diagnosis={diagnosis as Diagnosis} />
-                  {visual ? <VisualPanel visual={visual} hasDiagnosis={true} /> : null}
+                  {visual ? (
+                    <VisualPanel
+                      visual={visual}
+                      telemetryFoundProblem={diagnosis?.problemFound ?? null}
+                    />
+                  ) : null}
                 </div>
               );
             })}

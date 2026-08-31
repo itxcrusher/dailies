@@ -27,22 +27,33 @@ test("a usable verdict keeps the frame it judged", () => {
 
 test("one source speaking alone has no relationship to report", () => {
   const v = normalizeVisual({ verdict: "suspect", observation: "magenta" });
-  assert.equal(agreement(false, v), null, "no diagnosis to compare against");
+  assert.equal(agreement(null, v), null, "the investigator did not say what it found");
   assert.equal(agreement(true, null), null, "nobody looked at the frame");
 });
 
-test("a wrong-looking frame beside a diagnosis is agreement", () => {
+test("a clean shot with a clean frame is agreement, not a disagreement", () => {
+  // The bug this replaced. The board treated "a diagnosis exists" as "the telemetry
+  // found a problem", so a healthy shot with a healthy frame was announced in yellow as
+  // a DISAGREEMENT between sources. A diagnosis exists for every shot anyone asked
+  // about, including the ones that turned out fine.
+  const v = normalizeVisual({ verdict: "looks_correct", observation: "a grey cube" });
+  assert.equal(agreement(false, v), "agree_clean");
+  assert.match(agreementNote("agree_clean") ?? "", /nothing wrong/i);
+});
+
+test("a problem in both sources is agreement", () => {
   const v = normalizeVisual({ verdict: "suspect", observation: "magenta" });
   assert.equal(agreement(true, v), "agree_problem");
   assert.match(agreementNote("agree_problem") ?? "", /both sources agree/i);
 });
 
-test("a clean frame beside a diagnosis is the finding worth surfacing", () => {
-  // This is the only outcome that tells a supervisor something neither check could have
-  // told them on its own, so it must be stated rather than left to be noticed.
-  const v = normalizeVisual({ verdict: "looks_correct", observation: "a grey cube" });
-  assert.equal(agreement(true, v), "disagree");
-  assert.match(agreementNote("disagree") ?? "", /disagree/i);
+test("a problem in only one source is the finding worth surfacing", () => {
+  // The only outcome that tells a supervisor something neither check could have told
+  // them alone, in either direction.
+  const clean = normalizeVisual({ verdict: "looks_correct", observation: "a grey cube" });
+  const wrong = normalizeVisual({ verdict: "suspect", observation: "magenta" });
+  assert.equal(agreement(true, clean), "disagree", "telemetry saw it, the picture did not");
+  assert.equal(agreement(false, wrong), "disagree", "the picture saw it, telemetry did not");
   assert.match(agreementNote("disagree") ?? "", /human eye/i);
 });
 
