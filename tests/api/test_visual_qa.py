@@ -164,3 +164,77 @@ def test_renderer_knowledge_is_not_telemetry_knowledge():
     whole = (VISUAL_INSTRUCTION + build_visual_prompt("SH201")).lower()
     for leak in ("asset_missing", "jacket_diffuse", "prometheus", "loki", "exit code"):
         assert leak not in whole, f"the visual check must not be told {leak!r}"
+
+
+# --- the runner ----------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_verdict_comes_back_from_the_frame_bytes():
+    from dailies_api.visual_qa import check_frame
+
+    seen: dict[str, object] = {}
+
+    async def fake_model(*, image: bytes, mime_type: str, instruction: str, prompt: str):
+        seen.update(image=image, mime_type=mime_type, prompt=prompt)
+        return '{"verdict":"suspect","observation":"a flat magenta cube","confidence":"high"}'
+
+    verdict = await check_frame(b"\x89PNG-bytes", shot="SH201", model=fake_model)
+
+    assert verdict["verdict"] == "suspect"
+    assert verdict["observation"] == "a flat magenta cube"
+    assert seen["image"] == b"\x89PNG-bytes"
+    assert seen["mime_type"] == "image/png"
+
+
+@pytest.mark.asyncio
+async def test_the_runner_never_leaks_this_shots_telemetry_into_the_prompt():
+    """The design constraint, enforced where it can actually be broken.
+
+    An instruction test cannot catch a caller that appends 'the logs said asset_missing'
+    to the prompt. This one watches what the model is actually handed.
+    """
+    from dailies_api.visual_qa import check_frame
+
+    sent: dict[str, str] = {}
+
+    async def fake_model(*, image, mime_type, instruction, prompt):
+        sent.update(instruction=instruction, prompt=prompt)
+        return '{"verdict":"looks_correct","observation":"a grey cube","confidence":"high"}'
+
+    await check_frame(b"x", shot="SH201", model=fake_model)
+
+    whole = (sent["instruction"] + sent["prompt"]).lower()
+    for leak in ("asset_missing", "jacket_diffuse", "prometheus", "loki", "exit 0"):
+        assert leak not in whole
+
+
+@pytest.mark.asyncio
+async def test_an_unusable_answer_is_refused_rather_than_shown():
+    from dailies_api.visual_qa import VisualCheckFailed, check_frame
+
+    async def prose(*, image, mime_type, instruction, prompt):
+        return "The frame looks fine to me."
+
+    with pytest.raises(VisualCheckFailed):
+        await check_frame(b"x", shot="SH201", model=prose)
+
+
+@pytest.mark.asyncio
+async def test_a_verdict_without_an_observation_is_refused():
+    """Same rule as the investigator's evidence: a judgement nobody can check is not one."""
+    from dailies_api.visual_qa import VisualCheckFailed, check_frame
+
+    async def bare(*, image, mime_type, instruction, prompt):
+        return '{"verdict":"broken","confidence":"high"}'
+
+    with pytest.raises(VisualCheckFailed):
+        await check_frame(b"x", shot="SH201", model=bare)
+
+
+def test_a_jpeg_frame_is_typed_as_a_jpeg():
+    from dailies_api.visual_qa import mime_for
+
+    assert mime_for("SH201/frame_0001.png") == "image/png"
+    assert mime_for("SH201/frame_0001.jpg") == "image/jpeg"
+    assert mime_for("SH201/frame_0001.exr") == "image/png", "unknown types fall back to png"

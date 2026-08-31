@@ -10,7 +10,14 @@ that silently resolved to grey - there is no log line at all.
 A model told "this shot had a missing asset" and shown an image will agree, confidently,
 about a frame that is perfectly fine. The check would then be confirming the metrics
 rather than corroborating them, and two sources that cannot disagree are one source
-wearing two hats. So this runs blind: the image and the shot label, nothing else.
+wearing two hats. So this gets the image and the shot label, and nothing about what
+Prometheus or Loki said.
+
+It is *not*, however, blind to how renderers behave. The first version was, and it did
+not work: shown a grey cube and a magenta one from the same scene, it called both
+correct. Renderer knowledge is in :data:`VISUAL_INSTRUCTION` for that reason, and the
+distinction it draws is the one to hold onto - how to read the instrument, never what
+this shot's instruments said.
 
 What that buys is the only genuinely interesting result the system can produce - two
 independent verdicts that can be compared. A log saying ``asset_missing`` beside a
@@ -22,6 +29,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 __all__ = [
@@ -29,8 +37,16 @@ __all__ = [
     "VISUAL_SCHEMA",
     "VisualCheckFailed",
     "build_visual_prompt",
+    "check_frame",
+    "mime_for",
     "parse_verdict",
 ]
+
+#: Async callable that takes an image and returns the model's raw text.
+#:
+#: Injected so the whole check is testable without a network or a model, while the
+#: default remains the code that actually runs in production.
+VisualModel = Callable[..., Awaitable[str]]
 
 
 class VisualCheckFailed(RuntimeError):
@@ -191,3 +207,60 @@ def parse_verdict(answer: str) -> dict[str, Any]:
         confidence = "low"
 
     return {"verdict": verdict, "observation": observation, "confidence": confidence}
+
+
+#: What Gemini is told an image is. Keyed on extension because that is all a bucket path
+#: carries; sniffing the bytes would be more correct and is not worth a dependency for a
+#: renderer that writes exactly one format.
+_MIME: dict[str, str] = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+}
+
+
+def mime_for(path: str) -> str:
+    """The media type for a frame path, defaulting to PNG.
+
+    An unknown extension falls back rather than raising. Blender can be told to write
+    formats Gemini will not accept (EXR, TIFF), and the useful failure there is the
+    model saying it cannot read the image, not the API refusing to look.
+    """
+    lowered = path.lower()
+    for suffix, mime in _MIME.items():
+        if lowered.endswith(suffix):
+            return mime
+    return "image/png"
+
+
+async def check_frame(
+    image: bytes,
+    *,
+    shot: str,
+    model: VisualModel,
+    path: str = "frame.png",
+) -> dict[str, Any]:
+    """Ask the model what it sees, and refuse an answer that cannot be checked.
+
+    Args:
+        image: The frame's bytes.
+        shot: The shot label, for attribution. The ONLY thing about this render that
+            reaches the model.
+        model: What performs the call. Keyword-only arguments ``image``, ``mime_type``,
+            ``instruction`` and ``prompt``, returning the raw answer text.
+        path: The frame's path, used only to decide the media type.
+
+    Raises:
+        VisualCheckFailed: if the answer is not a verdict that could be shown to a
+            person, including one with no observation behind it. Same rule as the
+            investigator's evidence: a judgement nobody can open the frame and disagree
+            with is not a judgement.
+    """
+    answer = await model(
+        image=image,
+        mime_type=mime_for(path),
+        instruction=VISUAL_INSTRUCTION.replace("{schema}", json.dumps(VISUAL_SCHEMA, indent=2)),
+        prompt=build_visual_prompt(shot),
+    )
+    return parse_verdict(answer)
