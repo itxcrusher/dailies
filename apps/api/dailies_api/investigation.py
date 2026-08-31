@@ -120,6 +120,11 @@ def investigation_prompt(shot_id: str) -> str:
     return (
         f"Diagnose shot {label} on the current render.\n\n"
         f"The board tracks it as {shot_id!r}.\n\n"
+        f"EVERY query you run, against BOTH datasources, must cover {LOOKBACK} to now. "
+        "A render is a batch job that finished before you were asked, so a shorter "
+        "window returns nothing at all and looks exactly like a shot with no telemetry. "
+        "Pass the start and end times on the LOG query too, not only on the metric "
+        "queries.\n\n"
         "The two datasources do NOT label this shot the same way, and getting it wrong "
         "returns an empty result rather than an error:\n"
         f'- Prometheus: ordinary labels. Select with {{shot="{label}", '
@@ -128,7 +133,9 @@ def investigation_prompt(shot_id: str) -> str:
         "are structured metadata, so a stream selector on them matches nothing at all. "
         f'Select the stream and then filter: {{service_name="dailies-render"}} '
         f'| shot="{label}". Add | event_kind="asset_missing" to look for a missing '
-        "asset.\n\n"
+        f"asset, and query it over {LOOKBACK} to now like everything else: leaving the "
+        "window off returned no entries on a sixteen-hour-old render and had the shot "
+        "reported clean when it was not.\n\n"
         "Two more things about this stack, so you do not waste turns rediscovering "
         "them:\n"
         "- The render job has usually finished by the time you are asked. An instant "

@@ -37,3 +37,34 @@ def test_the_prompt_still_gives_the_prometheus_shape():
 def test_the_prompt_warns_that_an_empty_loki_result_may_be_the_wrong_selector():
     lowered = PROMPT.lower()
     assert "structured metadata" in lowered or "stream selector" in lowered
+
+
+def test_the_time_window_is_attached_to_loki_not_only_to_prometheus():
+    """The window has to be stated where the Loki query is described.
+
+    Driven on the deployed system: asked about SH201, the agent ran exactly the right
+    Loki selector and reported "no log entries", while the same query run by hand over
+    now-24h returned two asset_missing warnings. The window instruction lived inside the
+    bullet about PromQL, so the agent applied it to Prometheus - both metric queries
+    worked - and omitted it on Loki, which defaulted to a short recent window and found
+    nothing for a sixteen-hour-old render.
+
+    Empty rather than an error, for the sixth time on this stack, and this one made the
+    agent report a clean shot that had a missing asset.
+    """
+    from dailies_api.investigation import investigation_prompt
+    from dailies_api.shot_source import LOOKBACK
+
+    prompt = investigation_prompt("dailies:SEQ01:SH201:vqa-bad")
+    window = LOOKBACK.lstrip("now-")
+
+    # The Loki paragraph specifically must carry the window, not just the document.
+    loki_part = prompt[prompt.index("Loki:") :]
+    assert window in loki_part, "the Loki instruction must name the same window"
+
+
+def test_the_prompt_says_the_window_applies_to_both_datasources():
+    from dailies_api.investigation import investigation_prompt
+
+    lowered = investigation_prompt("dailies:SEQ01:SH201:vqa-bad").lower()
+    assert "both" in lowered or "every query" in lowered
