@@ -420,3 +420,54 @@ resource "google_cloud_run_v2_service_iam_member" "mcp_grafana_runtime" {
   role     = "roles/run.invoker"
   member   = "serviceAccount:${google_service_account.runtime.email}"
 }
+
+# The eval harness, as a job rather than a service.
+#
+# It exists as infrastructure at all because running it needs Vertex credentials, and the
+# runtime service account already has them. The alternative was application-default
+# credentials on a developer machine, which is a single global file shared with every
+# other project on that machine; a harness is not worth writing into it.
+#
+# Reuses the API image. The agent, its prompt, the schema and the parser are all already
+# in there, and a second image would be a second place for the thing under test to drift
+# from the thing deployed. The command is the only difference.
+resource "google_cloud_run_v2_job" "evals" {
+  name                = "dailies-evals"
+  location            = var.region
+  deletion_protection = false
+
+  template {
+    task_count  = 1
+    parallelism = 1
+
+    template {
+      service_account = google_service_account.runtime.email
+
+      # No retries. A failed scenario is the result, and a retry that passes on the second
+      # sample would report a score the first run did not earn.
+      max_retries = 0
+      timeout     = "1800s"
+
+      containers {
+        image   = var.api_image
+        command = ["python", "-m", "dailies_api.evals.harness"]
+
+        # Vertex only. The harness replays captured telemetry through a fake session, so
+        # it needs no MCP URL, no Grafana token and no bucket: everything it reads is
+        # compiled into the image, which is what makes the score reproducible.
+        env {
+          name  = "GOOGLE_GENAI_USE_VERTEXAI"
+          value = "TRUE"
+        }
+        env {
+          name  = "GOOGLE_CLOUD_PROJECT"
+          value = var.project_id
+        }
+        env {
+          name  = "GOOGLE_CLOUD_LOCATION"
+          value = var.region
+        }
+      }
+    }
+  }
+}
