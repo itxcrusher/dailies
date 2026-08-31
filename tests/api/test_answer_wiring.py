@@ -92,3 +92,30 @@ def test_a_board_with_no_answer_store_still_serves():
     app = create_app(ShotStore(), shot_source=Source(), answers=None)
 
     assert TestClient(app).get("/api/shots").status_code == 200
+
+
+def test_a_refresh_does_not_forget_when_an_answer_was_produced():
+    """The board rebuilds every shot from telemetry on each page load, and telemetry knows
+    nothing about answers. The merge that follows keeps the fields telemetry cannot speak
+    to, and `answered_at` and `answer_stale` are two of them.
+
+    Missing them, a freshly diagnosed shot lost its timestamp the instant the board polled
+    again, so the report header showed no age at all. Every API test still passed: the
+    diagnose route's own response carried the stamp correctly, and only the list route,
+    which is what the page actually reads, dropped it. Found by pressing the button on the
+    real board and watching "answered just now" fail to appear.
+    """
+    answers = Recording()
+    client = TestClient(
+        create_app(
+            ShotStore(), diagnose=diagnoser, inspect=looker, shot_source=Source(), answers=answers
+        )
+    )
+
+    posted = client.post(f"/api/shots/{SHOT}/diagnose").json()
+    assert posted["answered_at"] is not None, "the route itself must stamp the answer"
+
+    row = client.get("/api/shots").json()["shots"][0]
+
+    assert row["answered_at"] == posted["answered_at"], "the refresh dropped the timestamp"
+    assert row["answer_stale"] is False, "an answer this process just produced is not stale"

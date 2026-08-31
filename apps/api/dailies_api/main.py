@@ -534,10 +534,23 @@ def create_app(
                         }
                     )
             # Keep the fields telemetry cannot speak to, take the ones it owns.
+            #
+            # The provenance pair belongs to the first group and was missed. Telemetry has
+            # no idea when a shot was diagnosed or by which agent, so leaving them out of
+            # this merge silently reset them on the next poll: a shot diagnosed a second
+            # ago rendered with no age beside its report, on the board, while every API
+            # test passed because the diagnose route's own response was correct.
             shots.upsert(
                 rated
                 if held is None
-                else rated.model_copy(update={"diagnosis": held.diagnosis, "visual": held.visual})
+                else rated.model_copy(
+                    update={
+                        "diagnosis": held.diagnosis,
+                        "visual": held.visual,
+                        "answered_at": held.answered_at,
+                        "answer_stale": held.answer_stale,
+                    }
+                )
             )
 
     @app.get("/api/shots", response_model=ShotList, tags=["shots"])
