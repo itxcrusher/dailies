@@ -15,6 +15,10 @@ export type Shot = {
   frames_done: number;
   risk: Risk;
   diagnosis: Record<string, unknown> | null;
+  // What Gemini saw when it looked at this shot's newest frame, or null if nobody has
+  // looked. Beside the diagnosis rather than inside it: two independent sources, and the
+  // case worth a supervisor's attention is when they disagree.
+  visual?: Record<string, unknown> | null;
   // All nullable, and null is meaningful rather than missing: a shot that has rendered
   // no frames has no ETA to give, and one with no promised date has no slack. Rendering
   // a zero for either would be inventing a claim.

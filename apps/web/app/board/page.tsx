@@ -27,6 +27,7 @@ import { describeConfidence, describeSlack, formatEta } from "../delivery";
 import { DiagnoseButton } from "../DiagnoseButton";
 import { normalizeDiagnosis, type Diagnosis } from "../diagnosis";
 import { apiBase, fetchShots, hasLanded, parseId, percent, type Shot } from "../shots";
+import { agreement, agreementNote, normalizeVisual, verdictLabel, type Visual } from "../visual";
 
 // No caching in front of a live delivery board: a cached "ON_TRACK" outliving the shot
 // that started failing is the one failure mode this whole project exists to prevent.
@@ -103,6 +104,33 @@ function Report({ shotId, diagnosis }: { shotId: string; diagnosis: Diagnosis })
       ) : null}
 
       <Evidence entries={diagnosis.evidence} />
+    </section>
+  );
+}
+
+/**
+ * What the frame itself looks like, and how that sits against the telemetry.
+ *
+ * Rendered as its own block rather than folded into the diagnosis, because it is a
+ * second source. The relationship line is the reason both exist: a supervisor at 2am
+ * will not diff two paragraphs, and a clean-looking frame beside a reported cause is
+ * the one result neither check could have produced alone.
+ */
+function VisualPanel({ visual, hasDiagnosis }: { visual: Visual; hasDiagnosis: boolean }) {
+  const state = agreement(hasDiagnosis, visual);
+  const note = agreementNote(state);
+  return (
+    <section className="visual" aria-label="What the frame shows">
+      <div className="vhead">
+        <b>The frame</b>
+        <span>
+          {verdictLabel(visual.verdict)}
+          {visual.confidence ? ` · ${visual.confidence} confidence` : ""}
+        </span>
+      </div>
+      <p className="observation">{visual.observation}</p>
+      {note ? <p className={state === "disagree" ? "relation clash" : "relation"}>{note}</p> : null}
+      {visual.frame ? <p className="framepath">{visual.frame}</p> : null}
     </section>
   );
 }
@@ -206,9 +234,15 @@ export default async function Board() {
           </div>
           {rows
             .filter((row) => row.diagnosis !== null)
-            .map(({ shot, diagnosis }) => (
-              <Report key={shot.id} shotId={shot.id} diagnosis={diagnosis as Diagnosis} />
-            ))}
+            .map(({ shot, diagnosis }) => {
+              const visual = normalizeVisual(shot.visual ?? null);
+              return (
+                <div key={shot.id}>
+                  <Report shotId={shot.id} diagnosis={diagnosis as Diagnosis} />
+                  {visual ? <VisualPanel visual={visual} hasDiagnosis={true} /> : null}
+                </div>
+              );
+            })}
         </>
       )}
     </main>

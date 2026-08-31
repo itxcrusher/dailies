@@ -645,3 +645,68 @@ a {
   color: var(--dimmer);
   max-width: 64ch;
 }
+
+/* --- what the frame shows ------------------------------------------------ */
+
+/* A second yellow-bordered block, because yellow marks where a model spoke and this is
+   a model speaking. Distinguished from the investigator by its header word rather than
+   by a new colour: introducing a third hue would break the rule that green and red mean
+   status and yellow means generated, and leave a reader with nothing reliable. */
+.visual {
+  border: 2px solid var(--y);
+  border-top: 0;
+}
+
+.visual .vhead {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  background: var(--y);
+  color: var(--y-ink);
+  padding: 9px 14px;
+}
+
+.visual .vhead b {
+  font: 800 13px/1 var(--font-display);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.visual .vhead span {
+  font: 500 11px/1 var(--font-mono);
+  letter-spacing: 0.12em;
+}
+
+.observation {
+  margin: 0;
+  padding: 16px;
+  font-size: 15px;
+  line-height: 1.6;
+  color: #cfcfcf;
+}
+
+/* The relationship between the two sources. Muted when they agree, because agreement is
+   the expected case and does not need attention; loud when they do not, because that is
+   the only line on the page telling a supervisor something neither check found alone. */
+.relation {
+  margin: 0;
+  padding: 0 16px 16px;
+  font: 400 13px/1.6 var(--font-mono);
+  color: var(--dim);
+}
+
+.relation.clash {
+  color: var(--y);
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+  font-weight: 500;
+}
+
+.framepath {
+  margin: 0;
+  padding: 0 16px 14px;
+  font: 400 11px/1.5 var(--font-mono);
+  color: var(--dimmer);
+  overflow-wrap: anywhere;
+}
