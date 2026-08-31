@@ -376,6 +376,89 @@
         },
         "overrides": []
       }
+    },
+    {
+      "type": "timeseries",
+      "id": 9,
+      "title": "Agent activity, and where it found something",
+      "description": "Gemini tokens spent over the window, with an amber mark wherever the agent concluded a shot was broken.\n\nThis panel is why the dashboard has a time axis at all. Every other panel here answers with a number, and an annotation has nowhere to land on a number: the marks are the point, and a dashboard of stats would have discarded them silently.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 20
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "sum by (gen_ai_token_type) (increase(gen_ai_client_token_usage_sum[$__rate_interval]))",
+          "legendFormat": "{{gen_ai_token_type}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 25,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        }
+      }
     }
-  ]
+  ],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      },
+      {
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": false,
+        "iconColor": "#ffb020",
+        "name": "Agent findings",
+        "target": {
+          "limit": 100,
+          "matchAny": false,
+          "tags": [
+            "dailies"
+          ],
+          "type": "tags"
+        }
+      }
+    ]
+  }
 }

@@ -37,6 +37,7 @@ from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from dailies_api.annotate import should_annotate
 from dailies_api.delivery import rate
 from dailies_api.provenance import agent_fingerprint
 from dailies_api.state import Shot, ShotStore
@@ -243,6 +244,32 @@ def configure_logging(env: Mapping[str, str] | None = None) -> None:
     root.setLevel(level)
 
 
+def build_timeline_annotator(env: Mapping[str, str] | None = None):
+    """The Grafana timeline writer, or ``None`` when MCP is not configured.
+
+    Same shape and same environment as :func:`build_shot_source`: without an MCP URL there
+    is no Grafana to write to, and a deployment in that state should serve a board rather
+    than fail. Returning ``None`` rather than a no-op stand-in keeps that visible at the
+    call site instead of hiding a silently discarded write behind an object that looks
+    like it works.
+    """
+    values = os.environ if env is None else env
+    url = (values.get(MCP_URL_ENV) or "").strip()
+    if not url:
+        _log.info("No MCP URL configured; findings will not reach the Grafana timeline")
+        return None
+
+    from .annotate import build_annotator
+    from .mcp_transport import connect
+
+    return build_annotator(
+        connect,
+        url,
+        prometheus_uid=(values.get(PROMETHEUS_UID_ENV) or "").strip() or None,
+        loki_uid=(values.get(LOKI_UID_ENV) or "").strip() or None,
+    )
+
+
 def build_answer_store():
     """Where answers are kept across restarts, or None when there is no bucket.
 
@@ -373,6 +400,7 @@ def create_app(
     inspect: Inspect | None = None,
     shot_source: ShotSource | None = None,
     answers: Any = None,
+    annotate: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
 ) -> FastAPI:
     """Build the board API over ``store``.
 
@@ -414,6 +442,7 @@ def create_app(
     source = build_shot_source() if shot_source is None else shot_source
     look = build_inspector() if inspect is None else inspect
     kept = build_answer_store() if answers is None else answers
+    mark = build_timeline_annotator() if annotate is None else annotate
     # Per-app, never module-global, for the same reason the store is: two apps in one
     # process must not share a cooldown clock or a lock table.
     diagnosed_at: dict[str, float] = {}
@@ -759,6 +788,17 @@ def create_app(
                 # convenience; failing to write must never cost the supervisor the
                 # answer they are looking at.
                 await kept.save(shot_id, diagnosis=diagnosis, visual=visual)
+            # After the answer is safely stored, and best-effort like the storage itself.
+            # Only a found problem: see annotate.should_annotate for why a clean shot must
+            # not spend a mark. A supervisor asked what is wrong with this shot, and a
+            # failed write to a dashboard must not cost them the answer they asked for.
+            if mark is not None and should_annotate(diagnosis):
+                try:
+                    await mark(shot_id, diagnosis)
+                except Exception:  # noqa: BLE001 - corroboration, never a gate
+                    _log.warning(
+                        "Could not annotate the Grafana timeline for %s", shot_id, exc_info=True
+                    )
             # Stamped only on a COMPLETE success. A failed investigation must stay
             # retryable at once: a 502 that also started a five-minute cooldown would
             # leave a transient Grafana outage looking like a permanently broken button.

@@ -27,6 +27,7 @@ the worst of both, because it looks fine exactly when someone is testing it.
 from __future__ import annotations
 
 import json
+import math
 import os
 import pathlib
 import sys
@@ -78,7 +79,7 @@ def points_for(base: str, token: str, expr: str, *, instant: bool) -> int:
         # a short-lived job with one sample per series, so increase has nothing to
         # extrapolate from. Counting rows would have passed it.
         values = columns[-1] if columns else []
-        usable += sum(1 for v in values if isinstance(v, (int, float)) and v == v)
+        usable += sum(1 for v in values if isinstance(v, (int, float)) and not math.isnan(v))
     return usable
 
 
