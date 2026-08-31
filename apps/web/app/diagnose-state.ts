@@ -8,7 +8,7 @@
  * happening and roughly how long it takes.
  */
 
-export type DiagnoseState = "idle" | "running" | "error";
+export type DiagnoseState = "idle" | "running" | "error" | "cached";
 
 /** The shot's diagnose endpoint. Kept pure so the URL shape is pinned by a test. */
 export function diagnoseUrl(apiBase: string, shotId: string): string {
@@ -26,6 +26,22 @@ export function buttonLabel(state: DiagnoseState, hasDiagnosis: boolean): string
 }
 
 /**
+ * How long until this shot can be investigated again, in words.
+ *
+ * The cooldown is right to exist - the route is public, shot ids are enumerable, and
+ * every press costs a model call - but a button that silently returns the previous
+ * answer looks broken, and a supervisor who cannot tell "unchanged" from "nothing
+ * happened" presses it again. Which is the behaviour the cooldown exists to stop.
+ */
+export function cooldownNote(ageSeconds: number, cooldownSeconds = 300): string {
+  const remaining = Math.max(0, cooldownSeconds - ageSeconds);
+  const answered = ageSeconds < 60 ? "just now" : `${Math.round(ageSeconds / 60)}m ago`;
+  if (remaining <= 0) return `Answered ${answered}.`;
+  const wait = remaining < 60 ? `${remaining}s` : `${Math.ceil(remaining / 60)}m`;
+  return `Answered ${answered}. Ask again in ${wait}.`;
+}
+
+/**
  * The line under the button, or null when there is nothing worth saying.
  *
  * Only shown while running. An idle button explains itself; a running one has to set an
@@ -34,5 +50,6 @@ export function buttonLabel(state: DiagnoseState, hasDiagnosis: boolean): string
 export function statusLine(state: DiagnoseState, error: string | null): string | null {
   if (state === "running") return "Querying Prometheus and Loki through Grafana MCP, about 30s";
   if (state === "error" && error) return error;
+  if (state === "cached" && error) return error;
   return null;
 }

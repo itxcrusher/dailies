@@ -33,7 +33,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any, Protocol
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -443,6 +443,11 @@ def create_app(
             # browser and which a browser will not send without this.
             allow_methods=["GET", "POST", "OPTIONS"],
             allow_headers=["*"],
+            # A cross-origin response's custom headers are invisible to the page unless
+            # they are named here. The board reads these to tell a supervisor whether
+            # pressing Re-run actually recomputed anything, and without this the button
+            # would go back to looking broken for exactly the reason they were added.
+            expose_headers=["X-Dailies-Answer", "X-Dailies-Answer-Age"],
             # No cookies and no Authorization on this API, so credentialed requests would
             # only widen what an allowed origin can do without buying the board anything.
             allow_credentials=False,
@@ -565,7 +570,7 @@ def create_app(
         return await watched(shot_id)
 
     @app.post("/api/shots/{shot_id}/diagnose", response_model=Shot, tags=["shots"])
-    async def diagnose_shot(shot_id: str) -> Shot:
+    async def diagnose_shot(shot_id: str, response: Response) -> Shot:
         """Investigate one shot against live telemetry and keep the answer.
 
         Runs the ADK investigator over the Grafana MCP server: it queries Prometheus and
@@ -649,6 +654,12 @@ def create_app(
                         age,
                         DIAGNOSIS_COOLDOWN_SECONDS,
                     )
+                    # Said out loud, because a Re-run that silently returns the previous
+                    # answer looks like a broken button. A supervisor who cannot tell
+                    # "unchanged" from "nothing happened" will press it again, which is
+                    # the behaviour the cooldown exists to prevent.
+                    response.headers["X-Dailies-Answer"] = "cached"
+                    response.headers["X-Dailies-Answer-Age"] = str(int(age))
                     return held
 
             try:
@@ -716,6 +727,7 @@ def create_app(
             # out, which is exactly what happened to SH201 in production.
             if look is None or visual is not None:
                 diagnosed_at[shot_id] = time.monotonic()
+            response.headers["X-Dailies-Answer"] = "fresh"
             return stored
 
     return app

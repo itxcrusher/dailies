@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buttonLabel, diagnoseUrl, statusLine } from "./diagnose-state.ts";
+import { buttonLabel, cooldownNote, diagnoseUrl, statusLine } from "./diagnose-state.ts";
 
 test("the diagnose url targets the shot's own endpoint", () => {
   assert.equal(
@@ -37,4 +37,16 @@ test("a failure offers a retry and shows why", () => {
 
 test("an idle button says nothing extra", () => {
   assert.equal(statusLine("idle", null), null);
+});
+
+test("a cached answer is explained rather than looking like nothing happened", () => {
+  // The regression: pressing Re-run inside the cooldown returned the previous answer
+  // silently, so the page did not change and the button read as broken.
+  assert.equal(cooldownNote(20), "Answered just now. Ask again in 5m.");
+  assert.equal(cooldownNote(180), "Answered 3m ago. Ask again in 2m.");
+});
+
+test("once the cooldown has passed it does not tell anyone to wait", () => {
+  assert.equal(cooldownNote(300), "Answered 5m ago.");
+  assert.equal(cooldownNote(9000), "Answered 150m ago.");
 });

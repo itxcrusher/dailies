@@ -17,7 +17,13 @@
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 
-import { buttonLabel, diagnoseUrl, statusLine, type DiagnoseState } from "./diagnose-state";
+import {
+  buttonLabel,
+  cooldownNote,
+  diagnoseUrl,
+  statusLine,
+  type DiagnoseState,
+} from "./diagnose-state";
 
 type Props = {
   apiBase: string;
@@ -59,7 +65,17 @@ export function DiagnoseButton({ apiBase, shotId, hasDiagnosis }: Props) {
         setError(detail ?? `The API answered ${response.status}.`);
         return;
       }
-      setState("idle");
+      // The API says whether it recomputed. A Re-run inside the cooldown returns the
+      // previous answer, and without saying so the page simply does not change, which
+      // reads as a broken button and gets pressed again.
+      if (response.headers.get("X-Dailies-Answer") === "cached") {
+        const age = Number(response.headers.get("X-Dailies-Answer-Age") ?? 0);
+        setState("cached");
+        setError(cooldownNote(Number.isFinite(age) ? age : 0));
+      } else {
+        setState("idle");
+        setError(null);
+      }
       startTransition(() => router.refresh());
     } catch (cause) {
       setState("error");
@@ -72,7 +88,7 @@ export function DiagnoseButton({ apiBase, shotId, hasDiagnosis }: Props) {
   return (
     <div className="diagnose">
       <button type="button" onClick={run} disabled={running} aria-busy={running}>
-        {buttonLabel(running ? "running" : state, hasDiagnosis)}
+        {buttonLabel(running ? "running" : state === "cached" ? "idle" : state, hasDiagnosis)}
       </button>
       {status ? (
         <span className={state === "error" && !running ? "diagnose-status error" : "diagnose-status"}>

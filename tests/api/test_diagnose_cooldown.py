@@ -161,3 +161,47 @@ def test_with_no_visual_checker_a_diagnosis_alone_is_complete():
     client.post(url)
 
     assert len(calls) == 1
+
+
+# --- the button must not lie about what it did ---------------------------------------
+
+
+def test_a_cached_answer_says_so():
+    """ "Re-run" that silently returns the old answer looks like a broken button.
+
+    The cooldown is right to exist: this route is allUsers-bound, shot ids are
+    enumerable, and every press costs a Vertex call. But a supervisor pressing Re-run and
+    seeing the page not change has learned nothing, and will press it again. The response
+    says whether it recomputed, so the board can tell them.
+    """
+    calls: list[str] = []
+    client = TestClient(create_app(store_with(), diagnose=counting_diagnoser(calls)))
+    url = "/api/shots/dailies:SEQ01:SH030:job-7/diagnose"
+
+    first = client.post(url)
+    second = client.post(url)
+
+    assert first.headers["x-dailies-answer"] == "fresh"
+    assert second.headers["x-dailies-answer"] == "cached"
+    assert len(calls) == 1
+
+
+def test_a_cached_answer_says_how_old_it_is():
+    """ "Answered a moment ago" is actionable; "nothing happened" is not."""
+    calls: list[str] = []
+    client = TestClient(create_app(store_with(), diagnose=counting_diagnoser(calls)))
+    url = "/api/shots/dailies:SEQ01:SH030:job-7/diagnose"
+
+    client.post(url)
+    second = client.post(url)
+
+    age = int(second.headers["x-dailies-answer-age"])
+    assert 0 <= age < DIAGNOSIS_COOLDOWN_SECONDS
+
+
+def test_a_fresh_answer_reports_no_age():
+    client = TestClient(create_app(store_with(), diagnose=counting_diagnoser([])))
+    first = client.post("/api/shots/dailies:SEQ01:SH030:job-7/diagnose")
+
+    assert first.headers["x-dailies-answer"] == "fresh"
+    assert first.headers.get("x-dailies-answer-age") in (None, "0")
