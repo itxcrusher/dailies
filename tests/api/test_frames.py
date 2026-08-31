@@ -71,3 +71,43 @@ async def test_latest_frame_is_none_when_the_shot_has_rendered_nothing():
         raise AssertionError("should not read when there is nothing to read")
 
     assert await latest_frame("SH999", list_objects=empty, read_object=unused) is None
+
+
+# --- what the bucket actually contains -----------------------------------------------
+
+
+def test_a_directory_placeholder_is_not_a_frame():
+    """gcsfuse writes zero-byte directory markers, and they sort first by accident.
+
+    The bucket really contains this:
+
+        SH200/
+        SH200/frame_0001.png
+
+    and the marker's trailing number is 200, from the shot name, while the frame's is 1,
+    from the zero-padded frame number. So the marker won, the API downloaded zero bytes,
+    and Gemini answered 400 "Provided image is not valid" on every shot. The failure was
+    swallowed by design, so the board simply showed no visual verdict and nothing said why.
+    """
+    names = ["SH200/", "SH200/frame_0001.png"]
+    assert newest_of(names) == "SH200/frame_0001.png"
+
+
+def test_only_image_files_are_considered():
+    """A sidecar or a log dropped in the directory is not something to show a model."""
+    names = [
+        "SH100/frame_0002.png",
+        "SH100/render.log",
+        "SH100/frame_0003.json",
+    ]
+    assert newest_of(names) == "SH100/frame_0002.png"
+
+
+def test_a_directory_with_no_frames_yields_nothing():
+    assert newest_of(["SH999/"]) is None
+
+
+def test_the_shot_name_does_not_outrank_the_frame_number():
+    """The general form of the bug: digits in the path must not beat digits in the name."""
+    names = ["SEQ99/SH200/frame_0007.png", "SEQ99/SH200/frame_0012.png"]
+    assert newest_of(names) == "SEQ99/SH200/frame_0012.png"

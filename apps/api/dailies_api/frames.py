@@ -17,7 +17,7 @@ import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-__all__ = ["Frame", "bucket_name", "gcs_reader", "latest_frame", "newest_of"]
+__all__ = ["Frame", "bucket_name", "gcs_reader", "is_frame", "latest_frame", "newest_of"]
 
 _log = logging.getLogger(__name__)
 
@@ -25,6 +25,10 @@ _log = logging.getLogger(__name__)
 FRAMES_BUCKET_ENV = "DAILIES_FRAMES_BUCKET"
 
 _TRAILING_NUMBER = re.compile(r"(\d+)(?!.*\d)")
+
+#: Extensions that are a frame. Kept in step with visual_qa._MIME, which decides what
+#: media type each one is sent to the model as.
+_MIME_SUFFIXES: tuple[str, ...] = (".png", ".jpg", ".jpeg", ".webp")
 
 
 @dataclass(frozen=True)
@@ -41,6 +45,23 @@ def bucket_name(env: dict[str, str] | None = None) -> str | None:
     return (values.get(FRAMES_BUCKET_ENV) or "").strip() or None
 
 
+def is_frame(name: str) -> bool:
+    """Whether an object in the bucket is actually a rendered frame.
+
+    Two things in that directory are not. **Cloud Storage FUSE writes zero-byte directory
+    placeholders**, so the bucket really contains ``SH200/`` beside
+    ``SH200/frame_0001.png``; and a pipeline may drop a log or a sidecar next to the
+    images.
+
+    The placeholder is the one that bit. Its trailing number is 200, taken from the shot
+    name, while the frame's is 1, taken from the zero-padded frame number, so the marker
+    sorted highest and the API downloaded zero bytes. Gemini answered 400 "Provided image
+    is not valid" on every shot, the failure was swallowed by design, and the board simply
+    showed no visual verdict with nothing saying why.
+    """
+    return not name.endswith("/") and any(name.lower().endswith(ext) for ext in _MIME_SUFFIXES)
+
+
 def newest_of(names: list[str]) -> str | None:
     """The highest-numbered frame in a list of object names.
 
@@ -49,18 +70,27 @@ def newest_of(names: list[str]) -> str | None:
     a pipeline writes ``frame_9.png`` beside ``frame_10.png``, and a board that quietly
     shows frame 9 of a forty-frame render because it sorted last is very hard to notice.
 
-    A name with no number in it sorts below every name that has one, rather than being
-    dropped: a ``preview.png`` sitting in the directory is not a frame, but it is also
-    not a reason to return nothing.
+    Non-frames are filtered out first rather than ranked low, because ranking them low is
+    what failed: a placeholder whose path happens to carry a bigger number than the frame
+    number still won.
+
+    Among real frames, one with no number sorts below every one that has one. A
+    ``preview.png`` beside the frames is not the newest render, but it is also not a
+    reason to return nothing when it is all there is.
     """
-    if not names:
+    frames = [name for name in names if is_frame(name)]
+    if not frames:
         return None
 
     def key(name: str) -> tuple[int, int, str]:
-        match = _TRAILING_NUMBER.search(name)
+        # Only the FILENAME's number counts. A number in the directory path - a shot
+        # called SH200, a sequence called SEQ99 - has nothing to do with which frame is
+        # newest, and letting it in is the same bug in a different coat.
+        filename = name.rsplit("/", 1)[-1]
+        match = _TRAILING_NUMBER.search(filename)
         return (1, int(match.group(1)), name) if match else (0, 0, name)
 
-    return max(names, key=key)
+    return max(frames, key=key)
 
 
 async def latest_frame(
