@@ -5,6 +5,8 @@ board sees a farm nobody has ever asked about, and pressing Diagnose spends a Ve
 call rediscovering what the system concluded an hour ago.
 """
 
+from typing import ClassVar
+
 from dailies_api.main import create_app
 from dailies_api.state import Shot, ShotStore
 from fastapi.testclient import TestClient
@@ -23,7 +25,7 @@ VISUAL = {"verdict": "suspect", "observation": "a flat magenta cube", "confidenc
 class Source:
     """Reconstructs the shot from telemetry, exactly as the real one does after a restart."""
 
-    telemetry: dict = {}
+    telemetry: ClassVar[dict] = {}
 
     async def list_shots(self):
         return [Shot(id=SHOT, frames_total=3, frames_done=3)]

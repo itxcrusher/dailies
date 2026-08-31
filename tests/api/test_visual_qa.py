@@ -221,8 +221,14 @@ async def test_an_unusable_answer_is_refused_rather_than_shown():
 
 
 @pytest.mark.asyncio
-async def test_a_verdict_without_an_observation_is_refused():
-    """Same rule as the investigator's evidence: a judgement nobody can check is not one."""
+async def test_check_frame_refuses_a_verdict_without_an_observation():
+    """The same rule as the parser's, enforced where the model's reply actually arrives.
+
+    Distinct from ``test_a_verdict_without_an_observation_is_refused`` above, which asks
+    the parser directly. This one drives ``check_frame``, so it also proves the parser is
+    reached at all. Both existed under one name until ruff pointed it out, which meant the
+    parser test was shadowed and had never run.
+    """
     from dailies_api.visual_qa import VisualCheckFailed, check_frame
 
     async def bare(*, image, mime_type, instruction, prompt):

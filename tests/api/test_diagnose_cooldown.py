@@ -205,3 +205,48 @@ def test_a_fresh_answer_reports_no_age():
 
     assert first.headers["x-dailies-answer"] == "fresh"
     assert first.headers.get("x-dailies-answer-age") in (None, "0")
+
+
+def test_a_restored_answer_does_not_start_a_cooldown_nobody_served(monkeypatch):
+    """A cold start must not refuse to diagnose a shot this instance never answered.
+
+    Cloud Run scales to zero and replaces the instance on every deploy, so the shot store
+    is rebuilt from the persisted answers while the in-memory cooldown map starts empty.
+    Absence there means "never diagnosed here", and it has to be distinguishable from
+    "diagnosed long ago" rather than defaulting to 0.0, because that default is not a
+    point in the distant past. It is the clock's origin, and the clock is per sandbox.
+
+    **The origin was measured, not assumed.** A freshly deployed revision answered a
+    restored shot with ``X-Dailies-Answer-Age: 44`` while nothing had yet stamped the
+    map, so the reported age was ``time.monotonic()`` itself: 44 seconds after the
+    sandbox started. Every restored shot was therefore inside the cooldown for the
+    instance's first five minutes, which is exactly the demo path. The service idles
+    down between visits, a reviewer opens the board, presses Diagnose, and is told to
+    wait five minutes for an answer nobody asked for today.
+
+    The clock is patched because the bug is invisible without it: a developer machine has
+    been up for days, so the same defect computes an age of several hundred thousand
+    seconds and sails past the cooldown. This test failed only in production until the
+    clock became an input.
+    """
+    # Young, like a fresh sandbox, and still advancing so nothing waiting on elapsed
+    # time stalls. A frozen clock would be a different lie from the one being tested.
+    ticks = iter(44.0 + n * 0.001 for n in range(1_000_000))
+    monkeypatch.setattr("dailies_api.main.time.monotonic", lambda: next(ticks))
+
+    # Built into the store rather than mutated after the fact. ``get`` hands back a deep
+    # copy, so setting the diagnosis on a retrieved shot changes nothing the route reads,
+    # and this test passed against the broken code until it stopped doing that.
+    store = ShotStore()
+    store.upsert(
+        Shot(id="dailies:SEQ01:SH030:job-7", frames_total=48, frames_done=12, diagnosis=DIAGNOSIS)
+    )
+
+    calls: list[str] = []
+    client = TestClient(create_app(store, diagnose=counting_diagnoser(calls), inspect=None))
+
+    answer = client.post("/api/shots/dailies:SEQ01:SH030:job-7/diagnose")
+
+    assert answer.status_code == 200
+    assert calls == ["dailies:SEQ01:SH030:job-7"], "a restored answer must not block a re-run"
+    assert answer.headers["X-Dailies-Answer"] == "fresh"

@@ -8,6 +8,8 @@ What matters most here is that they fail independently. A bucket with no frames,
 vision call that errors, must not cost the telemetry diagnosis that already succeeded.
 """
 
+from typing import ClassVar
+
 from dailies_api.main import create_app
 from dailies_api.state import Shot, ShotStore
 from fastapi.testclient import TestClient
@@ -91,7 +93,7 @@ def test_the_visual_verdict_survives_a_refresh_from_telemetry():
     """Telemetry owns frame counts and knows nothing about what a frame looked like."""
 
     class Source:
-        telemetry: dict = {}
+        telemetry: ClassVar[dict] = {}
 
         async def list_shots(self):
             return [Shot(id="dailies:SEQ01:SH201:job-1", frames_total=3, frames_done=3)]

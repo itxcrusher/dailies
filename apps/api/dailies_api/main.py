@@ -646,8 +646,16 @@ def create_app(
                 and (look is None or held.visual is not None)
             )
             if complete:
-                age = time.monotonic() - diagnosed_at.get(shot_id, 0.0)
-                if age < DIAGNOSIS_COOLDOWN_SECONDS:
+                # Absence is ``None``, never a default of 0.0, and the difference is not
+                # pedantry. A missing entry means this instance has never served an answer
+                # for this shot, and 0.0 is not a point in the distant past: it is the
+                # monotonic clock's origin, which is per sandbox. A fresh Cloud Run
+                # instance measured 44 seconds, so every shot restored from the answer
+                # store sat inside the cooldown for the first five minutes of the
+                # instance's life, refusing to diagnose anything after a cold start.
+                served_at = diagnosed_at.get(shot_id)
+                age = None if served_at is None else time.monotonic() - served_at
+                if age is not None and age < DIAGNOSIS_COOLDOWN_SECONDS:
                     _log.info(
                         "Serving the diagnosis of %s stored %.0fs ago; cooldown is %ds",
                         shot_id,

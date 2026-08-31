@@ -75,7 +75,7 @@ def sample_from_buckets(buckets: Mapping[float, float]) -> list[float]:
             else:
                 representative = (previous_bound + bound) / 2.0
             if representative > 0:
-                sample.extend([representative] * int(round(in_bucket)))
+                sample.extend([representative] * round(in_bucket))
 
         if not math.isinf(bound):
             previous_bound = bound

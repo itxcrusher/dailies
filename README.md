@@ -49,7 +49,7 @@ pip install -e ".[dev,agent]"
 cp .env.example .env
 
 # 3. Run the gate
-python -m pytest -q                 # 557 tests
+python -m pytest -q                 # 580 tests
 python -m ruff check . && python -m ruff format --check .
 (cd apps/web && npm test && npx tsc --noEmit)
 
@@ -81,7 +81,7 @@ packages/render/     RenderBackend protocol, Blender worker, Cloud Run adapter
 packages/graph/      production graph, completion forecast, delivery slack
 scenes/              the Blender scene the demo renders, including the broken variant
 infra/               Dockerfiles, Cloud Build config, Terraform
-tests/               557 tests, heaviest over the parser and the agent contracts
+tests/               580 tests, heaviest over the parser and the agent contracts
 ```
 
 ## Notes on the engineering
