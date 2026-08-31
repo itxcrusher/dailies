@@ -29,11 +29,14 @@ export function humanDuration(seconds: number): string {
  * render and it must not be filled with a placeholder: a row reading "0m spare" when
  * nobody has estimated anything is a claim, and the wrong one.
  *
- * `landed` changes the tense, and it is not cosmetic. `Risk.MISSED` means the deadline
- * passed with the shot UNFINISHED, so a shot that finished late is correctly rated
- * ON_TRACK: it carries no delivery risk, because there is no longer anything to be late
- * with. Left alone, that put a green pill directly above the words "24m late", which
- * reads as a contradiction and invites a supervisor to distrust the pill.
+ * `landed` changes the tense, and it is not cosmetic. A finished shot is reported as a
+ * fact about what happened; an unfinished one as a forecast about what will. The same
+ * number means two different things, and only the wording separates them.
+ *
+ * This used to carry the whole burden. A landed shot was rated ON_TRACK, because it has
+ * no delivery risk left, which put a green pill directly above the words "24m late" and
+ * read as a contradiction. The pill now says DELIVERED or LATE, so the tense here
+ * reinforces the state rather than arguing with it.
  *
  * A finished shot is reported in the past tense as a fact about what happened, and an
  * unfinished one in the present tense as a forecast about what will. Same number, two
