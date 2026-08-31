@@ -233,6 +233,16 @@ a {
   color: var(--ok);
 }
 
+/* DELIVERED and ON_TRACK both take the default green above: one is finished well, the
+   other is heading there, and neither asks anything of a supervisor scanning the board.
+
+   LATE is amber rather than red on purpose. The shot is done, so nothing can be acted on
+   about its lateness, and spending the red on it would put a finished shot at the same
+   visual weight as a rejected frame or a deadline still being missed. */
+.status.s-LATE b {
+  color: var(--at-risk);
+}
+
 .status.s-WATCH b {
   color: var(--watch);
 }
@@ -242,6 +252,13 @@ a {
 .status.s-CRITICAL b,
 .status.s-MISSED b {
   color: var(--missed);
+}
+
+/* The provenance marker in a report header. Amber, not red: the conclusion may be
+   perfectly correct, and all the board knows is that a different agent produced it. */
+.rhead .stale {
+  font-style: normal;
+  color: var(--watch);
 }
 
 .status em {

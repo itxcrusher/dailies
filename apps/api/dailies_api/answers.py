@@ -62,9 +62,14 @@ class AnswerStore:
         *,
         write_object: Callable[[str, bytes], Awaitable[None]],
         read_object: Callable[[str], Awaitable[bytes | None]],
+        produced_by: str,
     ) -> None:
         self._write = write_object
         self._read = read_object
+        # Required rather than defaulted. A default would be a guess about which agent
+        # wrote an answer, and a wrong guess here is what marks a superseded conclusion as
+        # current, which is the whole failure this argument exists to prevent.
+        self._produced_by = produced_by
 
     async def save(
         self,
@@ -83,6 +88,10 @@ class AnswerStore:
             # When it was answered. A diagnosis read back tomorrow is about the render as
             # it was, and a reader needs to know how old the answer is to trust it.
             "saved_at": int(time.time()),
+            # And by what. See dailies_api.provenance: an answer that cannot say which
+            # agent produced it cannot be told apart from one the running agent would
+            # still stand behind.
+            "produced_by": self._produced_by,
             "diagnosis": diagnosis,
             "visual": visual,
         }
@@ -98,6 +107,11 @@ class AnswerStore:
         the object is gone, or what is stored cannot be read. All three mean the board
         has nothing to show, and a half-written object must cost one shot's history
         rather than the page.
+
+        The returned mapping carries a ``current`` flag: whether the agent that produced
+        the answer is the one running now. **A missing ``produced_by`` is not current.**
+        Every answer written before this existed has no stamp, and treating an absent one
+        as a match would exempt exactly the answers that motivated the check.
         """
         try:
             raw = await self._read(object_name(shot_id))
@@ -111,4 +125,7 @@ class AnswerStore:
         except (ValueError, UnicodeDecodeError):
             _log.warning("Stored answers for %s are not readable JSON; ignoring", shot_id)
             return None
-        return payload if isinstance(payload, dict) else None
+        if not isinstance(payload, dict):
+            return None
+        payload["current"] = payload.get("produced_by") == self._produced_by
+        return payload

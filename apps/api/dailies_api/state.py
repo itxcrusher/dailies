@@ -57,11 +57,35 @@ class Risk(StrEnum):
       outright rather than running slow.
     - ``MISSED``: the deadline has passed with the shot unfinished. Terminal, and kept
       distinct from ``CRITICAL`` so a post-mortem can tell a near miss from a real one.
+
+    Two of these answer a different question from the rest, and mixing them was a bug.
+    ``ON_TRACK`` through ``MISSED`` FORECAST an unfinished shot: will it make its
+    deadline. ``DELIVERED`` and ``LATE`` RECORD what happened to a finished one. A landed
+    shot used to fall back to ``ON_TRACK`` because it carried no risk any more, which put
+    a green ON TRACK pill directly above the words "delivered 22h 11m late" on the board.
+    Both statements were true and the pair read as a contradiction, which costs more than
+    either one being wrong: a supervisor who catches the board contradicting itself stops
+    believing the pill everywhere else.
+
+    - ``DELIVERED``: finished, and not known to have landed late. The calmest state, so
+      that any real failure combined with it always wins.
+    - ``LATE``: finished, and known to have landed after its deadline. Worse than
+      ``AT_RISK``, where the bad outcome is still only forecast, and deliberately BELOW
+      ``CRITICAL``. A shot can be finished and broken at once, and when it is, the
+      rejected frame is the actionable news while the lateness is history. Ordering
+      ``LATE`` above ``CRITICAL`` would let a late landing mask a failed render, which is
+      the one thing the second-opinion seam exists to prevent.
+
+    Declaration order is severity order, least to most severe, and :mod:`guardian` reads
+    it directly as ``tuple(Risk)``. Inserting a member here changes how every verdict
+    combines, so the position is part of the definition rather than a formatting choice.
     """
 
+    DELIVERED = "DELIVERED"
     ON_TRACK = "ON_TRACK"
     WATCH = "WATCH"
     AT_RISK = "AT_RISK"
+    LATE = "LATE"
     CRITICAL = "CRITICAL"
     MISSED = "MISSED"
 
@@ -138,6 +162,22 @@ class Shot(BaseModel):
             "they are two independent sources and the interesting case is when they "
             "disagree: a picture that looks fine beside a log saying an asset was missing "
             "is a real finding, and folding one into the other would hide it."
+        ),
+    )
+    answered_at: int | None = Field(
+        default=None,
+        description=(
+            "Unix seconds when the answer beside this shot was produced, or null when "
+            "nobody has asked. A diagnosis is a claim about a render at a moment, and the "
+            "board cannot say how much to trust one without saying how old it is."
+        ),
+    )
+    answer_stale: bool = Field(
+        default=False,
+        description=(
+            "True when the stored answer came from a different agent than the one running "
+            "now, so the board can show it without asserting the current agent stands "
+            "behind it. See dailies_api.provenance."
         ),
     )
     diagnosis: dict[str, Any] | None = Field(

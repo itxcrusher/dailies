@@ -43,11 +43,18 @@ def test_shot_detail_404s_for_unknown_shot():
     assert client.get("/api/shots/NOPE").status_code == 404
 
 
-def test_risk_has_exactly_the_five_members_the_board_depends_on():
+def test_risk_has_exactly_the_members_the_board_styles():
+    """Every member needs a colour rule in globals.css, so adding one is a UI change.
+
+    A member with no `.status.s-<NAME>` rule inherits the default text colour and reads as
+    a fifth severity nobody chose, on the one surface a supervisor scans fastest.
+    """
     assert {member.value for member in Risk} == {
+        "DELIVERED",
         "ON_TRACK",
         "WATCH",
         "AT_RISK",
+        "LATE",
         "CRITICAL",
         "MISSED",
     }
@@ -111,6 +118,11 @@ def test_shot_detail_returns_the_stored_shot():
         # Held beside the diagnosis, not inside it: two independent sources, and the
         # interesting case is when they disagree.
         "visual": None,
+        # When the answer was produced and whether the agent running now produced it. A
+        # shot handed straight to the store has no answer, so there is nothing to date and
+        # nothing to be stale.
+        "answered_at": None,
+        "answer_stale": False,
         # Delivery fields default to absent rather than zero. A shot handed straight to
         # the store has not been rated, and "not known" is not "on the wire with no time
         # left", which is what zeros here would claim.
@@ -148,12 +160,19 @@ def test_get_returns_none_for_an_unknown_shot():
 
 
 def test_risk_members_are_ordered_least_to_most_severe():
-    # The board sorts by declaration order, so the order is part of the contract and not
-    # just how the file happens to read.
+    # guardian reads this order directly as `_SEVERITY = tuple(Risk)` and combines two
+    # verdicts by taking the more severe, so the order decides which one a supervisor
+    # sees. It is part of the contract, not just how the file happens to read.
+    #
+    # LATE sits under CRITICAL deliberately: a shot can be finished and broken at once,
+    # and there the rejected frame is what someone must act on while the lateness is
+    # already history.
     assert [member.name for member in Risk] == [
+        "DELIVERED",
         "ON_TRACK",
         "WATCH",
         "AT_RISK",
+        "LATE",
         "CRITICAL",
         "MISSED",
     ]

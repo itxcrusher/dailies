@@ -194,10 +194,18 @@ def _delivery_verdict(
 ) -> Risk:
     """What the delivery arithmetic says on its own, confidence floors included."""
     if _has_landed(remaining_seconds):
-        # Nothing left to be late with. Answered before the slack check so a shot that has
-        # landed is never painted MISSED, and before the floors so it is never held amber
-        # by the confidence of an ETA it no longer has.
-        return Risk.ON_TRACK
+        # Nothing left to be late WITH, which is not the same as nothing having gone
+        # wrong. Answered before the slack check so a landed shot is never painted MISSED,
+        # and before the floors so it is never held amber by the confidence of an ETA it
+        # no longer has.
+        #
+        # Lateness is only claimed from a readable number. A nan slack means nobody knows
+        # where the deadline fell, and asserting LATE from an absent measurement is the
+        # exact failure this project exists to catch, so it reports the landing it can see
+        # and stays quiet about the deadline it cannot.
+        if math.isfinite(slack_seconds) and slack_seconds < 0:
+            return Risk.LATE
+        return Risk.DELIVERED
 
     floor = _FLOOR.get(confidence, _NO_EVIDENCE_FLOOR)
 

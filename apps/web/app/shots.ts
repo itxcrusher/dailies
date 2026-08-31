@@ -7,7 +7,16 @@
  * be reading two different truths on the same deployment.
  */
 
-export type Risk = "ON_TRACK" | "WATCH" | "AT_RISK" | "CRITICAL" | "MISSED";
+// DELIVERED and LATE record what happened to a FINISHED shot; the rest forecast an
+// unfinished one. Mixing the two put a green ON TRACK pill above "delivered 22h late".
+export type Risk =
+  | "DELIVERED"
+  | "ON_TRACK"
+  | "WATCH"
+  | "AT_RISK"
+  | "LATE"
+  | "CRITICAL"
+  | "MISSED";
 
 export type Shot = {
   id: string;
@@ -22,6 +31,11 @@ export type Shot = {
   // All nullable, and null is meaningful rather than missing: a shot that has rendered
   // no frames has no ETA to give, and one with no promised date has no slack. Rendering
   // a zero for either would be inventing a claim.
+  // When the answer beside this shot was produced, and whether the agent running now is
+  // the one that produced it. Without these the board presents a stored conclusion as a
+  // statement about the present, which is how a superseded verdict sat here for days.
+  answered_at?: number | null;
+  answer_stale?: boolean;
   eta_epoch?: number | null;
   deadline_epoch?: number | null;
   slack_seconds?: number | null;

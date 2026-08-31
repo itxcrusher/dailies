@@ -38,6 +38,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from dailies_api.delivery import rate
+from dailies_api.provenance import agent_fingerprint
 from dailies_api.state import Shot, ShotStore
 
 __all__ = [
@@ -257,7 +258,11 @@ def build_answer_store():
             _log.info("No bucket configured; answers will not survive a restart")
             return None
         write_object, read_object = gcs_answer_io(bucket)
-        return AnswerStore(write_object=write_object, read_object=read_object)
+        return AnswerStore(
+            write_object=write_object,
+            read_object=read_object,
+            produced_by=agent_fingerprint(),
+        )
     except Exception:  # noqa: BLE001 - storage setup must never break the API
         _log.exception("Could not set up the answer store; continuing without it")
         return None
@@ -520,6 +525,12 @@ def create_app(
                         update={
                             "diagnosis": previous.get("diagnosis"),
                             "visual": previous.get("visual"),
+                            "answered_at": previous.get("saved_at"),
+                            # Shown, not hidden. Dropping an answer the running agent did
+                            # not produce would empty the board after every deploy, and a
+                            # board with nothing on it teaches a visitor less than one that
+                            # says plainly how old what it holds is.
+                            "answer_stale": not previous.get("current", False),
                         }
                     )
             # Keep the fields telemetry cannot speak to, take the ones it owns.
@@ -720,7 +731,15 @@ def create_app(
 
             current = shots.get(shot_id) or shot
             stored = shots.upsert(
-                current.model_copy(update={"diagnosis": diagnosis, "visual": visual})
+                current.model_copy(
+                    update={
+                        "diagnosis": diagnosis,
+                        "visual": visual,
+                        # Just produced, by definition by the agent running now.
+                        "answered_at": int(time.time()),
+                        "answer_stale": False,
+                    }
+                )
             )
             if kept is not None:
                 # After the upsert, and best-effort inside AnswerStore. Persisting is a

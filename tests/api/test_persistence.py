@@ -47,7 +47,7 @@ async def test_an_answer_survives_being_written_and_read_back():
     async def read(name: str) -> bytes | None:
         return written.get(name)
 
-    store = AnswerStore(write_object=write, read_object=read)
+    store = AnswerStore(write_object=write, read_object=read, produced_by="test-agent")
     await store.save(
         "dailies:SEQ01:SH201:job-1", diagnosis={"cause": "x"}, visual={"verdict": "suspect"}
     )
@@ -66,7 +66,7 @@ async def test_a_shot_nobody_asked_about_reads_back_as_nothing():
     async def read(name: str) -> bytes | None:
         return None
 
-    store = AnswerStore(write_object=write, read_object=read)
+    store = AnswerStore(write_object=write, read_object=read, produced_by="test-agent")
     assert await store.load("dailies:SEQ01:SH999:job-1") is None
 
 
@@ -80,7 +80,7 @@ async def test_corrupt_stored_json_is_ignored_rather_than_crashing_the_board():
     async def read(name: str) -> bytes | None:
         return b"{not json"
 
-    store = AnswerStore(write_object=write, read_object=read)
+    store = AnswerStore(write_object=write, read_object=read, produced_by="test-agent")
     assert await store.load("dailies:SEQ01:SH201:job-1") is None
 
 
@@ -94,7 +94,7 @@ async def test_a_storage_failure_on_save_does_not_lose_the_answer_to_the_caller(
     async def read(name: str) -> bytes | None:
         return None
 
-    store = AnswerStore(write_object=write, read_object=read)
+    store = AnswerStore(write_object=write, read_object=read, produced_by="test-agent")
     await store.save("dailies:SEQ01:SH201:job-1", diagnosis={"cause": "x"}, visual=None)
 
 
@@ -109,7 +109,7 @@ async def test_what_is_written_is_readable_json():
     async def read(name: str) -> bytes | None:
         return written.get(name)
 
-    store = AnswerStore(write_object=write, read_object=read)
+    store = AnswerStore(write_object=write, read_object=read, produced_by="test-agent")
     await store.save("dailies:SEQ01:SH201:job-1", diagnosis={"cause": "x"}, visual=None)
 
     payload = json.loads(next(iter(written.values())).decode())

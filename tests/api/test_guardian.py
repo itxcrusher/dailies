@@ -110,18 +110,20 @@ def test_no_work_estimate_is_no_evidence_rather_than_a_traceback():
 
 
 @pytest.mark.parametrize("confidence", ["high", "medium", "low", "unknown"])
-def test_a_finished_shot_is_never_painted_with_a_delivery_colour(confidence):
+def test_a_finished_shot_is_never_painted_missed(confidence):
     """MISSED means the deadline passed with the shot *unfinished* (see state.Risk).
 
-    A landed shot is on track at every confidence, including the floored ones, and zero
-    work left is also the division a ratio rule would fall over on, so this pins the
-    answer rather than the traceback.
+    A landed shot reports how it landed, at every confidence including the floored ones,
+    and zero work left is also the division a ratio rule would fall over on, so this pins
+    the answer rather than the traceback.
 
-    ``forecast`` gives a finished shot a real confidence rather than ``unknown`` precisely
-    so delivered work does not read as not-on-track. A floor applied after the finished
-    check would defeat that for any shot whose spread band happens to land on ``low``.
+    The confidence is the point of the parametrisation. ``forecast`` gives a finished shot
+    a real confidence rather than ``unknown``, and a floor applied after the finished check
+    would drag any shot whose spread band happens to land on ``low`` to a different verdict
+    than the identical shot measured more tightly. How a shot landed is a fact; it does not
+    get less certain because the ETA that no longer applies to it was a rough one.
     """
-    assert assess(slack_seconds=-100, remaining_seconds=0, confidence=confidence) is Risk.ON_TRACK
+    assert assess(slack_seconds=-100, remaining_seconds=0, confidence=confidence) is Risk.LATE
 
 
 @pytest.mark.parametrize(
@@ -227,8 +229,13 @@ def test_a_shot_one_frame_in_with_a_day_of_room_is_not_escalated():
     assert verdict is Risk.WATCH, verdict
 
 
-def test_a_delivered_shot_reads_as_delivered_however_its_spread_landed():
-    """frames_done == frames_total gives remaining_seconds 0.0 and a real confidence."""
+def test_a_finished_shot_reports_how_it_landed_however_its_spread_landed():
+    """frames_done == frames_total gives remaining_seconds 0.0 and a real confidence.
+
+    The durations here are 10s and 30s, a spread wide enough to earn ``low``. Both
+    directions are checked because the floor could only ever be seen on one of them: a
+    verdict dragged amber by confidence would still look correct on the late shot.
+    """
     forecast = estimate_completion(
         frames_total=2,
         frames_done=2,
@@ -238,14 +245,15 @@ def test_a_delivered_shot_reads_as_delivered_however_its_spread_landed():
     )
     assert forecast.remaining_seconds == 0.0
     assert forecast.confidence == "low"
-    assert (
-        assess(
-            slack_seconds=-1000,
-            remaining_seconds=forecast.remaining_seconds,
-            confidence=forecast.confidence,
+    for slack, expected in ((-1000, Risk.LATE), (1000, Risk.DELIVERED)):
+        assert (
+            assess(
+                slack_seconds=slack,
+                remaining_seconds=forecast.remaining_seconds,
+                confidence=forecast.confidence,
+            )
+            is expected
         )
-        is Risk.ON_TRACK
-    )
 
 
 def test_a_corrupt_duration_greys_the_row_rather_than_taking_the_board_down():
@@ -260,3 +268,84 @@ def test_a_corrupt_duration_greys_the_row_rather_than_taking_the_board_down():
         )
         is Risk.WATCH
     )
+
+
+class TestALandedShotIsReportedAsAFactNotAForecast:
+    """A finished shot has no delivery risk left, but "no risk" is not "nothing happened".
+
+    ``ON_TRACK`` answers "will this make its deadline". A shot that has already landed a
+    day late is not on track; the question no longer applies to it. Reporting one green
+    put the words ON TRACK directly above "delivered 22h 11m late" on the board, and a
+    supervisor who reads a contradiction stops trusting the pill that produced it.
+
+    The two questions are now two sets of states. ``ON_TRACK``/``WATCH``/``AT_RISK``/
+    ``CRITICAL``/``MISSED`` forecast an unfinished shot; ``DELIVERED`` and ``LATE`` record
+    what happened to a finished one.
+    """
+
+    def test_a_shot_that_landed_after_its_deadline_is_late(self):
+        assert assess(slack_seconds=-79860, remaining_seconds=0, confidence="high") is Risk.LATE
+
+    def test_a_shot_that_landed_before_its_deadline_is_delivered(self):
+        assert assess(slack_seconds=3600, remaining_seconds=0, confidence="high") is Risk.DELIVERED
+
+    def test_landing_exactly_on_the_deadline_is_delivered(self):
+        """Zero slack is met, not missed. The deadline is the last acceptable moment."""
+        assert assess(slack_seconds=0, remaining_seconds=0, confidence="high") is Risk.DELIVERED
+
+    def test_lateness_is_never_claimed_without_a_readable_number(self):
+        """An unreadable slack means nobody knows, and DELIVERED is the claim that it landed.
+
+        Calling it LATE here would assert a fact about the deadline from an absent
+        measurement, which is the failure this project exists to catch.
+        """
+        assert (
+            assess(slack_seconds=math.nan, remaining_seconds=0, confidence="high") is Risk.DELIVERED
+        )
+
+    def test_a_landed_shot_is_still_never_painted_missed(self):
+        """MISSED means the deadline passed with work outstanding. Landed work has none."""
+        assert (
+            assess(slack_seconds=-math.inf, remaining_seconds=0, confidence="low")
+            is not Risk.MISSED
+        )
+
+    def test_the_confidence_floor_does_not_hold_a_landed_shot_amber(self):
+        """Unchanged behaviour: a shot that has landed carries no ETA left to doubt."""
+        assert assess(slack_seconds=-60, remaining_seconds=0, confidence="low") is Risk.LATE
+
+
+class TestTheSeverityOrderSurvivesTheNewStates:
+    def test_the_forecast_states_keep_their_relative_order(self):
+        order = list(Risk)
+        for lower, higher in (
+            (Risk.ON_TRACK, Risk.WATCH),
+            (Risk.WATCH, Risk.AT_RISK),
+            (Risk.AT_RISK, Risk.CRITICAL),
+            (Risk.CRITICAL, Risk.MISSED),
+        ):
+            assert order.index(lower) < order.index(higher)
+
+    def test_delivered_is_the_calmest_state_and_late_sits_under_critical(self):
+        """Severity decides what wins when a delivery verdict meets a failure risk.
+
+        LATE is worse than AT_RISK, where the bad outcome is still only forecast. It is
+        deliberately weaker than CRITICAL: a shot can be finished AND broken, and there
+        the rejected frame is what someone must act on while the lateness is already
+        history. This placement is what keeps a late landing from masking a failed render.
+        """
+        order = list(Risk)
+        assert order.index(Risk.DELIVERED) == 0
+        assert order.index(Risk.AT_RISK) < order.index(Risk.LATE) < order.index(Risk.CRITICAL)
+
+    def test_a_render_failure_still_escalates_a_delivered_shot(self):
+        """DELIVERED is the calmest state, so a real failure must always outrank it."""
+        assert (
+            assess(
+                slack_seconds=3600,
+                remaining_seconds=0,
+                confidence="high",
+                failure_risk=Risk.CRITICAL,
+            )
+            is Risk.CRITICAL
+        )

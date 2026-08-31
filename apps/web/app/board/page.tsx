@@ -26,6 +26,7 @@ import Link from "next/link";
 import { describeConfidence, describeSlack, formatEta } from "../delivery";
 import { DiagnoseButton } from "../DiagnoseButton";
 import { normalizeDiagnosis, type Diagnosis } from "../diagnosis";
+import { answeredAgo, provenanceNote } from "../answer-age";
 import { apiBase, fetchShots, hasLanded, parseId, percent, type Shot } from "../shots";
 import { agreement, agreementNote, normalizeVisual, verdictLabel, type Visual } from "../visual";
 
@@ -71,8 +72,22 @@ function Evidence({ entries }: { entries: Diagnosis["evidence"] }) {
 }
 
 /** Everything the investigator said about one shot. */
-function Report({ shotId, diagnosis }: { shotId: string; diagnosis: Diagnosis }) {
+function Report({
+  shotId,
+  diagnosis,
+  answeredAt,
+  stale,
+  nowEpoch,
+}: {
+  shotId: string;
+  diagnosis: Diagnosis;
+  answeredAt?: number | null;
+  stale?: boolean;
+  nowEpoch: number;
+}) {
   const { shot } = parseId(shotId);
+  const age = answeredAgo(answeredAt, nowEpoch);
+  const provenance = provenanceNote(Boolean(stale));
   return (
     <section className="report" aria-label={`Investigator diagnosis for ${shot}`}>
       <div className="rhead">
@@ -81,6 +96,11 @@ function Report({ shotId, diagnosis }: { shotId: string; diagnosis: Diagnosis })
           {shot}
           {diagnosis.confidence ? ` · ${diagnosis.confidence} confidence` : ""}
           {` · ${diagnosis.evidence.length} quer${diagnosis.evidence.length === 1 ? "y" : "ies"}`}
+          {age ? ` · answered ${age}` : ""}
+          {/* Marked rather than merely appended. This is the one part of the header that
+              says the current agent may not stand behind what follows, and it has to
+              survive a reader skimming the line. */}
+          {provenance ? <em className="stale"> · {provenance}</em> : null}
         </span>
       </div>
 
@@ -202,6 +222,9 @@ function ShotCard({ shot, base }: { shot: Shot; base: string }) {
 }
 
 export default async function Board() {
+  // Read once for the whole page. Calling Date.now() inside each card would let two rows
+  // rendered a second apart disagree about what "3m ago" means.
+  const nowEpoch = Math.floor(Date.now() / 1000);
   const { shots, error } = await fetchShots();
   const base = apiBase();
   const rows = shots.map((shot) => ({ shot, diagnosis: normalizeDiagnosis(shot.diagnosis) }));
@@ -244,7 +267,13 @@ export default async function Board() {
               const visual = normalizeVisual(shot.visual ?? null);
               return (
                 <div key={shot.id}>
-                  <Report shotId={shot.id} diagnosis={diagnosis as Diagnosis} />
+                  <Report
+                    shotId={shot.id}
+                    diagnosis={diagnosis as Diagnosis}
+                    answeredAt={shot.answered_at}
+                    stale={shot.answer_stale}
+                    nowEpoch={nowEpoch}
+                  />
                   {visual ? (
                     <VisualPanel
                       visual={visual}
