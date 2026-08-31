@@ -59,6 +59,11 @@ const CHAIN = [
     detail:
       "A Gemini agent on the Agent Development Kit reaches Prometheus and Loki only through the Grafana MCP server. Remove that connection and the project stops rather than degrades.",
   },
+  {
+    step: "And then it looks at the frame",
+    detail:
+      "Gemini opens the picture the render actually produced. It is told how renderers signal a failed texture and nothing at all about what this shot's metrics or logs said, so it can disagree with them. Two sources that cannot disagree are one source.",
+  },
 ];
 
 function ProofCard({ shot }: { shot: Shot }) {
@@ -115,10 +120,10 @@ export default async function Landing() {
           It has no idea what to do with a frame that <em>worked</em>.
         </h1>
         <p className="lede">
-          A texture fails to resolve on the worker. Blender falls back to a default material,
+          A texture fails to resolve on the worker. The renderer substitutes a placeholder,
           prints a warning, and <strong>exits 0</strong>. The frame saves. The frame count is
           complete. The durations look normal. Every automated system in the pipeline calls it a
-          success, and the jacket is grey.
+          success, and the jacket comes back flat magenta.
         </p>
         <p className="lede">
           Nobody finds out until a human watches the dailies. This is the failure Dailies catches,
@@ -157,9 +162,10 @@ export default async function Landing() {
         )}
         <p className="proof-note">
           The case that matters is a shot whose frames are <strong>all complete</strong> and which
-          is still wrong. Every number a scheduler looks at says success. The only evidence is a
-          log line, which is why the agent reads logs as well as metrics, and why every finding it
-          reports has to name the query behind it.
+          is still wrong. Every number a scheduler looks at says success. The evidence is a log
+          line and the picture itself, which is why the agent reads logs as well as metrics, then
+          opens the frame. Every finding it reports names the query behind it, and every visual
+          verdict names the frame it judged.
         </p>
         <Link className="cta" href="/board">
           Open the board and press Diagnose
