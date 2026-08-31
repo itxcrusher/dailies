@@ -22,6 +22,7 @@ from dailies_api.mcp_client import (
     PanelImage,
     ToolCallFailed,
 )
+from dailies_api.shot_source import LOOKBACK
 
 ALL_TOOLS = [
     "query_prometheus",
@@ -493,3 +494,41 @@ async def test_concurrent_capability_checks_list_the_tools_once():
     found = await asyncio.gather(mcp.has_tool("query_prometheus"), mcp.has_tool("create_incident"))
     assert found == [True, True]
     assert session.list_calls == 1
+
+
+# --- the log query defaults to the window the board uses -----------------------------
+
+
+async def test_a_loki_query_without_times_still_covers_the_board_window():
+    """The agent kept omitting the time range, so the wrapper supplies it.
+
+    Driven on the deployed system: asked about a sixteen-hour-old shot, the investigator
+    ran exactly the right Loki selector and reported "no log entries", while the same
+    query over now-24h returned two asset_missing warnings. It reported a clean shot that
+    had a missing asset.
+
+    Telling it harder in the prompt did not fix it, and on reflection it would not: the
+    parameters are named start_rfc3339 and end_rfc3339, the model does not know what time
+    it is, and a parameter demanding an absolute timestamp is one it will leave out. The
+    default belongs where the agent cannot get it wrong.
+    """
+    session = FakeSession()
+    mcp = GrafanaMCP(session=session, loki_uid="loki-uid")
+
+    await mcp.query_loki_logs('{service_name="dailies-render"}')
+
+    _, args = session.calls[-1]
+    assert args["startRfc3339"] == LOOKBACK
+    assert args["endRfc3339"] == "now"
+
+
+async def test_an_explicit_window_is_not_overridden():
+    """An agent that DID think about the window meant it."""
+    session = FakeSession()
+    mcp = GrafanaMCP(session=session, loki_uid="loki-uid")
+
+    await mcp.query_loki_logs('{a="b"}', start_rfc3339="now-5m", end_rfc3339="now-1m")
+
+    _, args = session.calls[-1]
+    assert args["startRfc3339"] == "now-5m"
+    assert args["endRfc3339"] == "now-1m"

@@ -34,6 +34,8 @@ from dataclasses import dataclass
 from typing import Any, ClassVar, Protocol
 from urllib.parse import urlparse
 
+from .windows import LOOKBACK
+
 __all__ = [
     "GrafanaMCP",
     "GrafanaMCPError",
@@ -340,14 +342,26 @@ class GrafanaMCP:
         Where the diagnosis agent gets its evidence: metrics say a shot is failing, the
         Blender stderr lines say why. ``direction="backward"`` (the server default) is
         newest-first, which is what you want when chasing a failure that just happened.
+
+        **The time window defaults to the one the board lists shots over**, and that
+        default is load-bearing rather than a convenience. Driven on the deployed system:
+        asked about a sixteen-hour-old shot, the investigator ran exactly the right
+        selector, omitted the times, and reported "no log entries" for a shot whose
+        asset-missing warning was sitting in Loki. It called a broken shot clean.
+
+        Instructing the model harder did not fix it and would not: these parameters are
+        named for RFC3339 timestamps, the model does not know what time it is, and a
+        parameter demanding an absolute instant is one it leaves out. The default belongs
+        here, where the agent cannot get it wrong. An explicit window still wins, because
+        an agent that did think about the range meant it.
         """
         return await self._call_json(
             "query_loki_logs",
             _args(
                 datasourceUid=self._loki(datasource_uid),
                 logql=logql,
-                startRfc3339=start_rfc3339,
-                endRfc3339=end_rfc3339,
+                startRfc3339=start_rfc3339 if start_rfc3339 is not None else LOOKBACK,
+                endRfc3339=end_rfc3339 if end_rfc3339 is not None else "now",
                 limit=limit,
                 direction=direction,
             ),

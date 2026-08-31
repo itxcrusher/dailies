@@ -26,21 +26,12 @@ from dailies_telemetry.schema import METRICS, Metric
 
 from .duration_sample import sample_from_buckets
 from .state import Shot
+from .windows import LOOKBACK, STEP_SECONDS
 
 __all__ = ["LOOKBACK", "STEP_SECONDS", "GrafanaShotSource"]
 
 _log = logging.getLogger(__name__)
 
-#: How far back to look for renders.
-#:
-#: Wide enough that a shot rendered earlier in the session is still on the board, narrow
-#: enough that a demo does not fill with weeks of history. A render is a batch job that
-#: ends, so "recent" here means "recently ran", not "currently running".
-LOOKBACK = "now-24h"
-
-#: Range-query resolution. Coarse on purpose: the queries below take the *last* point of
-#: each series, so a fine step buys nothing but a larger response.
-STEP_SECONDS = 300
 
 #: The identity labels a shot id is built from, in id order. The same four telemetry keys
 #: every render series by, which is what makes this reconstruction exact rather than a
