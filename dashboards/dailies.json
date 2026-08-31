@@ -2,19 +2,32 @@
   "uid": "dailies-observability",
   "title": "Dailies - render pipeline and the agent watching it",
   "description": "Two halves, which is the point. The left half is the render farm; the right half is the Gemini agent that reads it. An agent that watches a pipeline is itself a pipeline, and one that cannot be observed is one nobody can trust with a deadline.",
-  "tags": ["dailies", "render", "gen-ai", "agentic-cinema"],
+  "tags": [
+    "dailies",
+    "render",
+    "gen-ai",
+    "agentic-cinema"
+  ],
   "timezone": "browser",
   "schemaVersion": 39,
   "editable": true,
   "graphTooltip": 1,
-  "time": { "from": "now-24h", "to": "now" },
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
   "refresh": "1m",
   "panels": [
     {
       "type": "row",
       "id": 1,
       "title": "Render pipeline health",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
       "collapsed": false,
       "panels": []
     },
@@ -22,33 +35,55 @@
       "type": "bargauge",
       "id": 2,
       "title": "Frames completed vs expected, by shot",
-      "description": "The pair that defines this project's failure. A shot can read complete on both numbers and still have produced a broken frame, which is why the board carries a second opinion the metrics cannot give.",
-      "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
-      "gridPos": { "h": 9, "w": 9, "x": 0, "y": 1 },
+      "description": "The pair that defines this project's failure: a shot can read complete on both numbers and still have produced a broken frame, which is why the board carries a second opinion the metrics cannot give. Aggregated with max by (shot) because a re-rendered shot emits one series per execution, and the bare metric drew the same shot twice as if two different things had happened.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 9,
+        "x": 0,
+        "y": 1
+      },
       "targets": [
         {
           "refId": "A",
-          "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
-          "expr": "last_over_time(render_job_frames_completed_total[$__range])",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "max by (shot) (last_over_time(render_job_frames_completed_total[$__range]))",
           "legendFormat": "{{shot}} done",
           "instant": true
         },
         {
           "refId": "B",
-          "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
-          "expr": "last_over_time(render_job_frames_expected[$__range])",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "max by (shot) (last_over_time(render_job_frames_expected[$__range]))",
           "legendFormat": "{{shot}} expected",
           "instant": true
         }
       ],
       "options": {
-        "displayMode": "gradient",
+        "displayMode": "basic",
         "orientation": "horizontal",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
       },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "continuous-GrYlRd" },
+          "color": {
+            "mode": "palette-classic"
+          },
           "min": 0,
           "unit": "short"
         },
@@ -56,57 +91,114 @@
       }
     },
     {
-      "type": "timeseries",
+      "type": "stat",
       "id": 3,
       "title": "Frame render duration",
-      "description": "Reconstructed from the histogram buckets rather than sum/count. Identical durations give a sum/count spread of zero, which reads as high confidence when it is really a sample of one.",
-      "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
-      "gridPos": { "h": 9, "w": 9, "x": 9, "y": 1 },
+      "description": "Reconstructed from the histogram buckets rather than sum/count: identical durations give a sum/count spread of zero, which reads as high confidence when it is really a sample of one.\n\nA stat rather than a timeseries, and that choice decides the query. As a timeseries every point used the same whole-window lookback, so it drew a perfectly flat line carrying nothing the number does not. A stat issues an INSTANT query, and instant is where increase() breaks here: a render is a short-lived job with one sample per series, so increase has nothing to extrapolate from and returns NaN. Measured: the same expression gives NaN instant and 689 points over a range.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 9,
+        "x": 9,
+        "y": 1
+      },
       "targets": [
         {
           "refId": "A",
-          "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
           "expr": "histogram_quantile(0.95, sum by (le) (last_over_time(render_frame_duration_seconds_bucket[$__range])))",
-          "legendFormat": "p95"
+          "legendFormat": "p95",
+          "instant": true
         },
         {
           "refId": "B",
-          "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
           "expr": "histogram_quantile(0.50, sum by (le) (last_over_time(render_frame_duration_seconds_bucket[$__range])))",
-          "legendFormat": "p50"
+          "legendFormat": "p50",
+          "instant": true
         }
       ],
       "fieldConfig": {
         "defaults": {
           "unit": "s",
-          "custom": { "lineWidth": 2, "fillOpacity": 8, "showPoints": "auto" }
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#7fe3ff"
+          },
+          "decimals": 2
         },
         "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "orientation": "horizontal",
+        "justifyMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
       }
     },
     {
       "type": "bargauge",
       "id": 4,
-      "title": "Peak worker memory, by shot",
-      "description": "The failure a render farm already catches. Kept beside the ones it does not, so the contrast is visible.",
-      "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
-      "gridPos": { "h": 9, "w": 6, "x": 18, "y": 1 },
+      "title": "Peak worker memory, by render job",
+      "description": "The failure a render farm already catches, kept beside the ones it does not so the contrast is visible.\n\nLabelled by render job and worker, not by shot: render_worker_memory_bytes carries no shot label at all. The panel used to claim one, so Grafana fell back to printing the entire series name and the legend was unreadable.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 6,
+        "x": 18,
+        "y": 1
+      },
       "targets": [
         {
           "refId": "A",
-          "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
           "expr": "last_over_time(render_worker_memory_bytes[$__range])",
-          "legendFormat": "{{shot}}",
+          "legendFormat": "{{render_job}} \u00b7 {{worker}}",
           "instant": true
         }
       ],
       "options": {
         "displayMode": "lcd",
         "orientation": "horizontal",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
       },
       "fieldConfig": {
-        "defaults": { "unit": "bytes", "color": { "mode": "continuous-BlPu" }, "min": 0 },
+        "defaults": {
+          "unit": "bytes",
+          "color": {
+            "mode": "continuous-BlPu"
+          },
+          "min": 0
+        },
         "overrides": []
       }
     },
@@ -114,7 +206,12 @@
       "type": "row",
       "id": 5,
       "title": "Agent health - the half that observes the observer",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 10 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 10
+      },
       "collapsed": false,
       "panels": []
     },
@@ -123,12 +220,23 @@
       "id": 6,
       "title": "Gemini tokens by type",
       "description": "Thinking tokens are billed and invisible in the answer, so an agent whose cost is only counted at the output underreports itself several times over.",
-      "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
-      "gridPos": { "h": 9, "w": 9, "x": 0, "y": 11 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 9,
+        "x": 0,
+        "y": 11
+      },
       "targets": [
         {
           "refId": "A",
-          "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
           "expr": "sum by (gen_ai_token_type) (last_over_time(gen_ai_client_token_usage_sum[$__range]))",
           "legendFormat": "{{gen_ai_token_type}}",
           "instant": true
@@ -137,10 +245,22 @@
       "options": {
         "displayMode": "gradient",
         "orientation": "horizontal",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
       },
       "fieldConfig": {
-        "defaults": { "unit": "short", "color": { "mode": "continuous-YlBl" }, "min": 0 },
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "continuous-YlBl"
+          },
+          "min": 0
+        },
         "overrides": []
       }
     },
@@ -148,14 +268,25 @@
       "type": "stat",
       "id": 7,
       "title": "Investigation latency (p95)",
-      "description": "One press of Diagnose is several sequential Grafana queries plus a Gemini call, so this is the number a supervisor actually waits through.",
-      "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
-      "gridPos": { "h": 9, "w": 7, "x": 9, "y": 11 },
+      "description": "One press of Diagnose is several sequential Grafana queries plus a Gemini call, so this is the number a supervisor actually waits through. increase() rather than last_over_time() because Cloud Run replaces the instance on every deploy and resets the counter; the bare last value described only the newest process. It works here and not for the render metrics because the API is a long-lived service with many samples per series.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 7,
+        "x": 9,
+        "y": 11
+      },
       "targets": [
         {
           "refId": "A",
-          "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
-          "expr": "histogram_quantile(0.95, sum by (le) (last_over_time(gen_ai_client_operation_duration_seconds_bucket[$__range])))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (increase(gen_ai_client_operation_duration_seconds_bucket[$__range])))",
           "legendFormat": "p95",
           "instant": true
         }
@@ -164,7 +295,13 @@
         "colorMode": "value",
         "graphMode": "none",
         "textMode": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
       },
       "fieldConfig": {
         "defaults": {
@@ -172,9 +309,18 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "#ffb020", "value": 45 },
-              { "color": "red", "value": 90 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "#ffb020",
+                "value": 45
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
             ]
           }
         },
@@ -185,14 +331,25 @@
       "type": "stat",
       "id": 8,
       "title": "Investigations run",
-      "description": "Every one of these is a Vertex call somebody paid for, which is why the public Diagnose route carries a per-shot cooldown.",
-      "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
-      "gridPos": { "h": 9, "w": 8, "x": 16, "y": 11 },
+      "description": "Every one of these is a Vertex call somebody paid for, which is why the public Diagnose route carries a per-shot cooldown.\n\nCounted with increase() across instance restarts. last_over_time() reported 1 while the true figure for the same window was 17: each deploy starts a fresh process whose counter begins at zero, and the last value is only ever the newest one's.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 16,
+        "y": 11
+      },
       "targets": [
         {
           "refId": "A",
-          "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
-          "expr": "sum(last_over_time(gen_ai_client_operation_duration_seconds_count[$__range]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "round(sum(increase(gen_ai_client_operation_duration_seconds_count[$__range])))",
           "legendFormat": "investigations",
           "instant": true
         }
@@ -201,10 +358,22 @@
         "colorMode": "value",
         "graphMode": "none",
         "textMode": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
       },
       "fieldConfig": {
-        "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "#7fe3ff" } },
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#7fe3ff"
+          }
+        },
         "overrides": []
       }
     }

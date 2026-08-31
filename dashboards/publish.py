@@ -68,7 +68,18 @@ def points_for(base: str, token: str, expr: str, *, instant: bool) -> int:
         "to": str(now),
     }
     frames = _post(f"{base}/api/ds/query", token, body)["results"]["A"].get("frames", [])
-    return sum(len(f["data"]["values"][0]) for f in frames if f.get("data", {}).get("values"))
+    usable = 0
+    for frame in frames:
+        columns = frame.get("data", {}).get("values") or []
+        # The VALUE column, not the timestamp column, and NaN does not count. A panel can
+        # come back with a full set of points that are every one of them NaN, which draws
+        # an empty chart while satisfying any check that only counts rows. That is exactly
+        # what histogram_quantile over increase() does to the render duration: a render is
+        # a short-lived job with one sample per series, so increase has nothing to
+        # extrapolate from. Counting rows would have passed it.
+        values = columns[-1] if columns else []
+        usable += sum(1 for v in values if isinstance(v, (int, float)) and v == v)
+    return usable
 
 
 def main() -> int:
@@ -82,6 +93,7 @@ def main() -> int:
 
     dashboard = json.loads(DASHBOARD.read_text(encoding="utf-8"))
 
+    # NaN counts as empty; see points_for.
     empty = []
     for panel in dashboard["panels"]:
         if panel["type"] == "row":
