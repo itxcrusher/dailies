@@ -105,3 +105,31 @@ async def test_the_tool_still_presents_its_real_name_and_docs_to_the_model():
 
     assert tool.__name__ == "query_loki_logs"
     assert tool.__doc__, "the docstring is the model's description of the tool"
+
+
+# --- what the agent was actually handed ----------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_tool_result_is_logged_with_its_size(caplog):
+    """The agent reports findings; this records what it was given to find them in.
+
+    Three hypotheses in a row failed to explain why the investigator kept reporting "no
+    log entries" for a shot whose warning is demonstrably in Loki, reachable through the
+    same server with the same query. The missing fact each time was what the tool
+    actually returned, which nothing recorded: the diagnosis preserves the QUERY but not
+    the RESULT, so an answer that misreads a good result and one that faithfully reports
+    an empty one are indistinguishable after the fact.
+    """
+    import logging
+
+    session = RejectingSession()
+    session.calls = 1  # skip the rejection; we want a successful call
+    tool = loki_tool(investigator(session))
+
+    with caplog.at_level(logging.INFO, logger="dailies_api.agent"):
+        await tool(logql='{service_name="dailies-render"}')
+
+    logged = " ".join(r.getMessage() for r in caplog.records)
+    assert "query_loki_logs" in logged
+    assert "1" in logged, "the size of what came back has to be in the line"

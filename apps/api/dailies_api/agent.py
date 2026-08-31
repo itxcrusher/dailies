@@ -334,7 +334,7 @@ def _recoverable(bound: Any) -> Any:
     @wraps(bound)
     async def tool(*args: Any, **kwargs: Any) -> Any:
         try:
-            return await bound(*args, **kwargs)
+            result = await bound(*args, **kwargs)
         except GrafanaMCPError as exc:
             _log.warning("Tool %s rejected the model's call: %s", bound.__name__, exc)
             return {
@@ -345,7 +345,33 @@ def _recoverable(bound: Any) -> Any:
                 ),
             }
 
+        # What the agent was actually handed, recorded because nothing else keeps it.
+        # A diagnosis preserves the QUERY it ran but not the RESULT, so an answer that
+        # misreads a good result and one that faithfully reports an empty one are
+        # indistinguishable afterwards. Three separate hypotheses about a persistently
+        # wrong Loki finding all failed for want of this line.
+        _log.info("Tool %s returned %s", bound.__name__, _describe(result))
+        return result
+
     return tool
+
+
+def _describe(result: Any) -> str:
+    """A short, non-sensitive shape of a tool result: how much came back, not what.
+
+    Deliberately not the payload. A log line carrying whole log bodies would be both
+    enormous and a way to copy render output into a second system that nobody audited.
+    """
+    if isinstance(result, dict):
+        data = result.get("data")
+        if isinstance(data, list):
+            return f"{len(data)} item(s)"
+        if isinstance(data, dict):
+            return f"dict with {len(data)} key(s)"
+        return f"dict with keys {sorted(result)[:6]}"
+    if isinstance(result, list):
+        return f"{len(result)} item(s)"
+    return type(result).__name__
 
 
 def _reject_duplicate_tool_names(tools: list[Any]) -> None:
