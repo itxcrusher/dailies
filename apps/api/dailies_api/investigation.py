@@ -28,7 +28,6 @@ code that actually runs in production.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import time
@@ -38,6 +37,9 @@ from typing import TYPE_CHECKING, Any
 
 from dailies_api.mcp_client import GrafanaMCP, MCPSession
 from dailies_api.mcp_transport import connect
+from dailies_api.retry import RETRY_ATTEMPTS as _RETRY_ATTEMPTS
+from dailies_api.retry import RETRY_DELAY_SECONDS as _RETRY_DELAY_SECONDS
+from dailies_api.retry import run_with_retry as _run_with_retry
 from dailies_api.shot_source import LOOKBACK
 
 if TYPE_CHECKING:  # pragma: no cover - annotation only, so this module imports without ADK
@@ -154,71 +156,12 @@ def shot_label(shot_id: str) -> str:
     return parts[2] if len(parts) == 4 else shot_id
 
 
-#: How many times to attempt an investigation that comes back rate-limited.
-#:
-#: Bounded, not indefinite: the route has a timeout and a supervisor waiting, and a
-#: retry loop that outlives either is worse than a clear failure. Three attempts covers
-#: the observed case, which is a brief concurrency spike rather than a project that is
-#: out of quota for the day.
-RETRY_ATTEMPTS = 3
-
-#: Seconds before the first retry, doubling after that.
-#:
-#: Measured, not guessed: on 2026-08-29 ten concurrent calls as the runtime service
-#: account returned two 429s while sequential calls never did. The allowance recovers in
-#: about a second, so the first backoff only has to outlast a burst, not a daily cap.
-RETRY_DELAY_SECONDS = 2.0
-
-
-def _is_rate_limited(exc: BaseException) -> bool:
-    """Whether ``exc`` is Vertex saying "ask again" rather than "no".
-
-    Matched on the class name and the message rather than by importing the ADK's
-    ``_ResourceExhaustedError``: it is private, it moved once already between versions
-    (the ``LogRecord`` incident cost a whole render), and this module must stay
-    importable without the ``agent`` extra installed. The 429 code is in the message
-    text on every variant seen so far, so both checks are cheap and neither is load
-    bearing alone.
-    """
-    name = type(exc).__name__
-    text = str(exc)
-    return "ResourceExhausted" in name or "RESOURCE_EXHAUSTED" in text or "429" in text
-
-
-async def run_with_retry(
-    call: Callable[[], Awaitable[str]],
-    *,
-    attempts: int = RETRY_ATTEMPTS,
-    delay: float = RETRY_DELAY_SECONDS,
-) -> str:
-    """Run ``call``, retrying only a rate limit, with exponential backoff.
-
-    A 429 is the one model-side failure that means "ask again" rather than "this cannot
-    be answered". Everything else is passed straight through: retrying a retired model
-    id or a malformed request only spends the caller's minute to reach the same place.
-
-    The first real end-to-end diagnosis this project ever ran failed on a 429, because
-    the ADK agent loop makes one model call per tool round trip and the trial project's
-    concurrency allowance is smaller than that. Without this, the board would have told
-    a supervisor their render could not be diagnosed when nothing about the render was
-    wrong.
-    """
-    backoff = delay
-    for attempt in range(1, attempts + 1):
-        try:
-            return await call()
-        except Exception as exc:
-            if not _is_rate_limited(exc) or attempt == attempts:
-                raise
-            _log.warning(
-                "Investigation rate-limited (attempt %d of %d); retrying in %.1fs",
-                attempt,
-                attempts,
-                backoff,
-            )
-            await asyncio.sleep(backoff)
-            backoff *= 2
-    raise AssertionError("unreachable: the loop either returns or raises")  # pragma: no cover
+#: Re-exported so existing callers and tests keep their import site. The policy itself
+#: lives in :mod:`dailies_api.retry`, because Visual QA needs the same one and two copies
+#: would be two places to get the backoff wrong.
+RETRY_ATTEMPTS = _RETRY_ATTEMPTS
+RETRY_DELAY_SECONDS = _RETRY_DELAY_SECONDS
+run_with_retry = _run_with_retry
 
 
 async def run_agent(

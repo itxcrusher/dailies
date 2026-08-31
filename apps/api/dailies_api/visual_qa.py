@@ -33,6 +33,8 @@ import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from .retry import run_with_retry
+
 __all__ = [
     "VISUAL_INSTRUCTION",
     "VISUAL_SCHEMA",
@@ -242,6 +244,7 @@ async def check_frame(
     shot: str,
     model: VisualModel,
     path: str = "frame.png",
+    retry_delay: float | None = None,
 ) -> dict[str, Any]:
     """Ask the model what it sees, and refuse an answer that cannot be checked.
 
@@ -259,11 +262,21 @@ async def check_frame(
             investigator's evidence: a judgement nobody can open the frame and disagree
             with is not a judgement.
     """
-    answer = await model(
-        image=image,
-        mime_type=mime_for(path),
-        instruction=VISUAL_INSTRUCTION.replace("{schema}", json.dumps(VISUAL_SCHEMA, indent=2)),
-        prompt=build_visual_prompt(shot),
+
+    async def once() -> str:
+        return await model(
+            image=image,
+            mime_type=mime_for(path),
+            instruction=VISUAL_INSTRUCTION.replace("{schema}", json.dumps(VISUAL_SCHEMA, indent=2)),
+            prompt=build_visual_prompt(shot),
+        )
+
+    # Retried for the same reason the investigation is: a Vertex 429 here is a burst, and
+    # the diagnose route makes two model calls per press, so it trips the trial project's
+    # allowance roughly twice as readily as the investigator alone did. This check
+    # failed exactly that way in production while the investigator beside it succeeded.
+    answer = await (
+        run_with_retry(once) if retry_delay is None else run_with_retry(once, delay=retry_delay)
     )
     return parse_verdict(answer)
 
