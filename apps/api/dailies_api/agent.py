@@ -202,6 +202,12 @@ How to work:
    only structured metadata, and a step wider than the lookback delta. Before you report
    that data is missing, vary the query, because the shot you were asked about is on the
    board and its telemetry exists.
+   If after varying the query everything is still empty, say exactly that: you could not
+   read this shot's telemetry. Do NOT report that the render completed cleanly. Absence of
+   evidence is not evidence of success, and concluding a shot is healthy from queries that
+   returned nothing is the same error as naming a fault you never saw. It is the error
+   this system exists to prevent, and it is worse here, because a supervisor who is told a
+   broken shot is fine stops looking.
 6. Prefer the narrowest query that answers the question. A query over the whole farm when
    one shot is in question buries the signal you are looking for.
 7. Follow the frames. A shot-level average hides the two frames that are actually broken;

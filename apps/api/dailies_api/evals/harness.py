@@ -182,10 +182,22 @@ def _line(grade_: Grade) -> str:
     )
 
 
+#: Seconds to wait between scenarios.
+#:
+#: Not politeness. Each scenario is an agent loop of several sequential Gemini calls, and
+#: four of them back to back exhaust this project's Vertex allowance: the first real run
+#: retried on three of the four scenarios and lost one outright to a 429 after all three
+#: attempts. A harness that reports a scenario as failed when the model was never asked is
+#: measuring the quota, not the agent.
+_SETTLE_SECONDS = 25.0
+
+
 async def _run(model: str | None) -> int:
     print("  scenario            verdict cause evidence honest  evidence")
     grades = []
-    for scenario in SCENARIOS:
+    for index, scenario in enumerate(SCENARIOS):
+        if index:
+            await asyncio.sleep(_SETTLE_SECONDS)
         result = await run_scenario(scenario, model=model)
         grades.append(result)
         print(_line(result))

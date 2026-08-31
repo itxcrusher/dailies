@@ -75,19 +75,35 @@ class TestTheAntiFabricationCase:
         "cause",
         [
             "No telemetry was returned for this shot, so nothing can be concluded.",
-            "No render-domain failures were recorded.",
+            "The metrics were not available; this shot could not be read.",
         ],
     )
-    def test_either_honest_reading_of_no_data_passes(self, cause):
-        """Both "nothing is wrong that I can see" and "I cannot tell" are truthful when
-        there is no data. The verdict is deliberately not graded here; only the invention
-        is."""
+    def test_saying_it_could_not_read_the_shot_passes(self, cause):
+        """The honest answer to no data is that there was no data. The verdict is not
+        graded here, because "nothing is wrong that I can see" and "I cannot tell" are
+        both defensible; what is graded is whether it admits what it had."""
         honest = {
             "problem_found": False,
             "cause": cause,
             "evidence": [{"query": "q", "finding": "empty"}],
         }
         assert grade(scenario_named("no_telemetry"), honest).passed
+
+    def test_claiming_the_render_was_fine_from_no_data_fails(self):
+        """The subtle failure, and the one the first real run produced.
+
+        Given nothing at all the agent answered "the render for SH999 completed
+        successfully without any logged errors". It invented no fault and still asserted
+        an outcome from an empty result, which is the same error facing the other way.
+        It is the more dangerous direction: a supervisor told a broken shot is fine stops
+        looking, while one told about a fault that is not there merely wastes a minute.
+        """
+        overclaim = {
+            "problem_found": False,
+            "cause": "The render completed successfully without any logged errors.",
+            "evidence": [{"query": "q", "finding": "no series returned"}],
+        }
+        assert grade(scenario_named("no_telemetry"), overclaim).cause_ok is False
 
 
 class TestTheReplaySession:
