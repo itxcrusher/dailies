@@ -254,11 +254,19 @@ a {
   color: var(--missed);
 }
 
-/* The provenance marker in a report header. Amber, not red: the conclusion may be
-   perfectly correct, and all the board knows is that a different agent produced it. */
+/* The provenance marker in a report header.
+   Inverted rather than coloured. The header bar is var(--y) with dark ink on it, and the
+   first attempt at this used var(--watch): amber text on a yellow bar, which rendered the
+   one phrase that says "the current agent did not produce this" almost invisible. There
+   is no status colour that survives that background, so it takes the ink as a chip
+   instead. Not red: the conclusion may be perfectly correct, and all the board knows is
+   that a different agent produced it. */
 .rhead .stale {
   font-style: normal;
-  color: var(--watch);
+  background: var(--y-ink);
+  color: var(--y);
+  padding: 2px 6px;
+  border-radius: 2px;
 }
 
 .status em {

@@ -100,7 +100,12 @@ function Report({
           {/* Marked rather than merely appended. This is the one part of the header that
               says the current agent may not stand behind what follows, and it has to
               survive a reader skimming the line. */}
-          {provenance ? <em className="stale"> · {provenance}</em> : null}
+          {provenance ? (
+            <>
+              {" · "}
+              <em className="stale">{provenance}</em>
+            </>
+          ) : null}
         </span>
       </div>
 
