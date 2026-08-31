@@ -201,6 +201,47 @@ class Inspect(Protocol):
     async def __call__(self, shot_id: str) -> dict[str, Any] | None: ...
 
 
+#: Marks the handler this module installed, so a second call replaces rather than adds.
+_HANDLER_TAG = "dailies-api"
+
+
+def configure_logging(env: Mapping[str, str] | None = None) -> None:
+    """Make the quiet paths visible.
+
+    Nothing configured a level, so the root logger sat at WARNING and every ``_log.info``
+    in this codebase was discarded. That is not cosmetic. Twice while debugging Visual QA
+    in production the deciding question was whether it had found a frame at all, the
+    answer is logged at INFO by :func:`~dailies_api.frames.latest_frame`, and it was not
+    in Cloud Logging.
+
+    It matters here more than in most services because the visual check is deliberately
+    non-fatal: a shot with no frame and a shot whose check blew up look identical from
+    outside, and the log is the only thing that tells them apart.
+
+    The level is read from the environment so a noisy incident can be turned down without
+    rebuilding an image, and an unreadable value falls back rather than taking the
+    service down over a typo in a variable.
+    """
+    values = os.environ if env is None else env
+    wanted = (values.get("DAILIES_LOG_LEVEL") or "INFO").strip().upper()
+    level = getattr(logging, wanted, None)
+    if not isinstance(level, int):
+        level = logging.INFO
+
+    root = logging.getLogger()
+    # Replace our own handler rather than adding another. Cloud Run can import the app
+    # factory more than once, and a second handler duplicates every line in the log.
+    for existing in list(root.handlers):
+        if getattr(existing, "name", None) == _HANDLER_TAG:
+            root.removeHandler(existing)
+
+    handler = logging.StreamHandler()
+    handler.name = _HANDLER_TAG
+    handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    root.addHandler(handler)
+    root.setLevel(level)
+
+
 def build_answer_store():
     """Where answers are kept across restarts, or None when there is no bucket.
 
@@ -360,6 +401,7 @@ def create_app(
     # caller is falsy and `store or ShotStore()` would quietly swap it for a different
     # one. The bug would only show up once something upserted into the caller's store and
     # the board kept answering with an empty list.
+    configure_logging()
     shots = ShotStore() if store is None else store
     # `is None` again, not `or`: a caller-supplied source must never be swapped out, and
     # building the default here rather than per request means an unconfigured deployment
