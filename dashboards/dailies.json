@@ -1,0 +1,212 @@
+{
+  "uid": "dailies-observability",
+  "title": "Dailies - render pipeline and the agent watching it",
+  "description": "Two halves, which is the point. The left half is the render farm; the right half is the Gemini agent that reads it. An agent that watches a pipeline is itself a pipeline, and one that cannot be observed is one nobody can trust with a deadline.",
+  "tags": ["dailies", "render", "gen-ai", "agentic-cinema"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "editable": true,
+  "graphTooltip": 1,
+  "time": { "from": "now-24h", "to": "now" },
+  "refresh": "1m",
+  "panels": [
+    {
+      "type": "row",
+      "id": 1,
+      "title": "Render pipeline health",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "bargauge",
+      "id": 2,
+      "title": "Frames completed vs expected, by shot",
+      "description": "The pair that defines this project's failure. A shot can read complete on both numbers and still have produced a broken frame, which is why the board carries a second opinion the metrics cannot give.",
+      "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+      "gridPos": { "h": 9, "w": 9, "x": 0, "y": 1 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+          "expr": "last_over_time(render_job_frames_completed_total[$__range])",
+          "legendFormat": "{{shot}} done",
+          "instant": true
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+          "expr": "last_over_time(render_job_frames_expected[$__range])",
+          "legendFormat": "{{shot}} expected",
+          "instant": true
+        }
+      ],
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "continuous-GrYlRd" },
+          "min": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 3,
+      "title": "Frame render duration",
+      "description": "Reconstructed from the histogram buckets rather than sum/count. Identical durations give a sum/count spread of zero, which reads as high confidence when it is really a sample of one.",
+      "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+      "gridPos": { "h": 9, "w": 9, "x": 9, "y": 1 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+          "expr": "histogram_quantile(0.95, sum by (le) (last_over_time(render_frame_duration_seconds_bucket[$__range])))",
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+          "expr": "histogram_quantile(0.50, sum by (le) (last_over_time(render_frame_duration_seconds_bucket[$__range])))",
+          "legendFormat": "p50"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "lineWidth": 2, "fillOpacity": 8, "showPoints": "auto" }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "bargauge",
+      "id": 4,
+      "title": "Peak worker memory, by shot",
+      "description": "The failure a render farm already catches. Kept beside the ones it does not, so the contrast is visible.",
+      "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+      "gridPos": { "h": 9, "w": 6, "x": 18, "y": 1 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+          "expr": "last_over_time(render_worker_memory_bytes[$__range])",
+          "legendFormat": "{{shot}}",
+          "instant": true
+        }
+      ],
+      "options": {
+        "displayMode": "lcd",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": { "unit": "bytes", "color": { "mode": "continuous-BlPu" }, "min": 0 },
+        "overrides": []
+      }
+    },
+    {
+      "type": "row",
+      "id": 5,
+      "title": "Agent health - the half that observes the observer",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 10 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "bargauge",
+      "id": 6,
+      "title": "Gemini tokens by type",
+      "description": "Thinking tokens are billed and invisible in the answer, so an agent whose cost is only counted at the output underreports itself several times over.",
+      "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+      "gridPos": { "h": 9, "w": 9, "x": 0, "y": 11 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+          "expr": "sum by (gen_ai_token_type) (last_over_time(gen_ai_client_token_usage_sum[$__range]))",
+          "legendFormat": "{{gen_ai_token_type}}",
+          "instant": true
+        }
+      ],
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "color": { "mode": "continuous-YlBl" }, "min": 0 },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "id": 7,
+      "title": "Investigation latency (p95)",
+      "description": "One press of Diagnose is several sequential Grafana queries plus a Gemini call, so this is the number a supervisor actually waits through.",
+      "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+      "gridPos": { "h": 9, "w": 7, "x": 9, "y": 11 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+          "expr": "histogram_quantile(0.95, sum by (le) (last_over_time(gen_ai_client_operation_duration_seconds_bucket[$__range])))",
+          "legendFormat": "p95",
+          "instant": true
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "#ffb020", "value": 45 },
+              { "color": "red", "value": 90 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "id": 8,
+      "title": "Investigations run",
+      "description": "Every one of these is a Vertex call somebody paid for, which is why the public Diagnose route carries a per-shot cooldown.",
+      "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+      "gridPos": { "h": 9, "w": 8, "x": 16, "y": 11 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+          "expr": "sum(last_over_time(gen_ai_client_operation_duration_seconds_count[$__range]))",
+          "legendFormat": "investigations",
+          "instant": true
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "#7fe3ff" } },
+        "overrides": []
+      }
+    }
+  ]
+}

@@ -79,6 +79,7 @@ apps/web/            Next.js: the case at /, the board at /board
 packages/telemetry/  render telemetry schema, Blender output parser, OTLP emitter
 packages/render/     RenderBackend protocol, Blender worker, Cloud Run adapter
 packages/graph/      production graph, completion forecast, delivery slack
+dashboards/          the Grafana dashboard, and a publisher that refuses empty panels
 scenes/              the Blender scene the demo renders, including the broken variant
 infra/               Dockerfiles, Cloud Build config, Terraform
 tests/               580 tests, heaviest over the parser and the agent contracts
@@ -95,6 +96,14 @@ Every one produced **an empty result rather than an error**. That is the lesson 
 A second class of defect cost as much and looks nothing like the first. The cooldown that stops the public Diagnose button from being a free Vertex tap read a missing entry as `0.0`, and `0.0` on a monotonic clock is not a moment long past. It is the clock's origin, and the origin is per sandbox. A freshly started Cloud Run instance is seconds old, so every shot restored from storage sat inside a five-minute cooldown and the service refused to diagnose anything for the first five minutes after each cold start, which is the normal path for a visitor arriving at a service that has scaled to zero.
 
 That test could not fail on a developer machine. A workstation has been up for days, so the same code computes an age of several hundred thousand seconds and sails past the cooldown; the bug existed only where the clock was young. It fails now because the clock is an input to the test rather than an ambient fact, which is the general form of the fix: **the environment a test runs in is part of the test, whether or not it is written down.**
+
+## The dashboard
+
+`dashboards/dailies.json` is one dashboard in two halves, which is the point: the render farm on top, and underneath it the Gemini agent that reads the render farm. An agent trusted with a deadline is itself a pipeline, and one nobody can observe is one nobody should trust.
+
+Every panel wraps its metric in `last_over_time(m[$__range])` rather than querying it bare, and that is not a style preference. Prometheus answers an instant query only from a sample inside its five-minute staleness window, and a render that finished an hour ago has none: measured on this stack, `render_job_frames_expected` returns 6 series over a 24h range and **0** as an instant query. Bare metrics would have produced a dashboard that is correct during a render and empty the rest of the time, which is the worst of the two, because it looks right exactly when someone is testing it.
+
+`dashboards/publish.py` runs every panel's own query before uploading and refuses to publish one that would render as an empty chart. A dashboard is the one artefact where being wrong is invisible: a query against a metric that does not exist draws the same picture as a quiet pipeline. That guard is tested by pointing a panel at a metric that does not exist and confirming the publish is refused.
 
 ## Licence
 
