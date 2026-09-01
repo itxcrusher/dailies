@@ -735,3 +735,11 @@ a {
   color: var(--dimmer);
   overflow-wrap: anywhere;
 }
+
+/* An empty board that could not read its telemetry. Amber, because it is a fault to act
+   on rather than the ordinary quiet of a farm between renders. */
+.empty.unreadable {
+  color: var(--watch);
+  border-left: 2px solid var(--watch);
+  padding-left: 12px;
+}

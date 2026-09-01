@@ -56,7 +56,11 @@ export function apiBase(): string {
   return raw.replace(/\/+$/, "");
 }
 
-export async function fetchShots(): Promise<{ shots: Shot[]; error: string | null }> {
+export async function fetchShots(): Promise<{
+  shots: Shot[];
+  error: string | null;
+  telemetryReadable: boolean;
+}> {
   const url = `${apiBase()}/api/shots`;
   try {
     const response = await fetch(url, {
@@ -69,14 +73,20 @@ export async function fetchShots(): Promise<{ shots: Shot[]; error: string | nul
       signal: AbortSignal.timeout(25000),
     });
     if (!response.ok) {
-      return { shots: [], error: `${url} answered ${response.status}` };
+      return { shots: [], error: `${url} answered ${response.status}`, telemetryReadable: true };
     }
-    const body = (await response.json()) as { shots?: Shot[] };
-    return { shots: body.shots ?? [], error: null };
+    const body = (await response.json()) as { shots?: Shot[]; telemetry_readable?: boolean };
+    // Absent means an older API that cannot answer, and anything that cannot answer must
+    // not raise an alarm it has no evidence for.
+    return { shots: body.shots ?? [], error: null, telemetryReadable: body.telemetry_readable ?? true };
   } catch (cause) {
     // The page still renders. A page that 500s when the API is down tells a judge
     // nothing; a page that says which URL failed tells them exactly where to look.
-    return { shots: [], error: `${url} is unreachable (${(cause as Error).message})` };
+    return {
+      shots: [],
+      error: `${url} is unreachable (${(cause as Error).message})`,
+      telemetryReadable: true,
+    };
   }
 }
 

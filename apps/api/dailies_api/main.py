@@ -363,6 +363,16 @@ class ShotList(BaseModel):
     """
 
     shots: list[Shot] = Field(description="Every shot being watched, in submission order")
+    telemetry_readable: bool = Field(
+        default=True,
+        description=(
+            "Whether the last refresh could read the telemetry source. False means the "
+            "shots below are whatever was already held and may be stale, and that an "
+            "empty list says nothing about whether the farm is idle. Defaults true, "
+            "because anything that cannot answer the question must not raise an alarm "
+            "it has no evidence for."
+        ),
+    )
 
 
 class Health(BaseModel):
@@ -508,7 +518,7 @@ def create_app(
         """
         return Health()
 
-    async def refresh() -> None:
+    async def refresh() -> bool:
         """Fold whatever telemetry knows about into the store.
 
         An upsert per shot rather than replacing the store, because the two sides know
@@ -524,7 +534,10 @@ def create_app(
         board keeps serving what it already had and the cause goes to the log.
         """
         if source is None:
-            return
+            # Nothing wired, so nothing failed. An unconfigured deployment genuinely has
+            # no shots, and reporting that as a telemetry failure would cry wolf on every
+            # local run.
+            return True
         try:
             discovered = await source.list_shots()
         except Exception:  # noqa: BLE001 - deliberate; see the docstring above
@@ -534,7 +547,10 @@ def create_app(
             # all of them present identically to a supervisor. The cause goes to Cloud
             # Logging with a traceback; the board keeps serving what it already holds.
             _log.exception("Could not refresh shots from telemetry; serving what is held")
-            return
+            # Said out loud rather than swallowed. The board rebuilds from telemetry on
+            # every load, so a failure here empties it, and an empty board that blames the
+            # farm for being idle is a lie told to the one person who could act.
+            return False
         # What telemetry knows beyond the frame counts: the due date and the observed
         # frame costs, per shot. A source that does not carry it (a test fake, or a
         # future source over something other than Grafana) simply rates on progress.
@@ -582,11 +598,13 @@ def create_app(
                 )
             )
 
+        return True
+
     @app.get("/api/shots", response_model=ShotList, tags=["shots"])
     async def list_shots() -> ShotList:
         """Every shot being watched, refreshed from telemetry first."""
-        await refresh()
-        return ShotList(shots=shots.all())
+        readable = await refresh()
+        return ShotList(shots=shots.all(), telemetry_readable=readable)
 
     async def watched(shot_id: str) -> Shot:
         """The shot, or the 404 both shot routes answer an unknown id with.

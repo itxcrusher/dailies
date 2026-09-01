@@ -26,6 +26,7 @@ import Link from "next/link";
 import { describeConfidence, describeSlack, formatEta } from "../delivery";
 import { DiagnoseButton } from "../DiagnoseButton";
 import { normalizeDiagnosis, type Diagnosis } from "../diagnosis";
+import { emptyMessage, stalenessNotice } from "../board-state";
 import { answeredAgo, provenanceNote } from "../answer-age";
 import { apiBase, fetchShots, hasLanded, parseId, percent, type Shot } from "../shots";
 import { agreement, agreementNote, normalizeVisual, verdictLabel, type Visual } from "../visual";
@@ -230,10 +231,11 @@ export default async function Board() {
   // Read once for the whole page. Calling Date.now() inside each card would let two rows
   // rendered a second apart disagree about what "3m ago" means.
   const nowEpoch = Math.floor(Date.now() / 1000);
-  const { shots, error } = await fetchShots();
+  const { shots, error, telemetryReadable } = await fetchShots();
   const base = apiBase();
   const rows = shots.map((shot) => ({ shot, diagnosis: normalizeDiagnosis(shot.diagnosis) }));
   const diagnosed = rows.filter((row) => row.diagnosis !== null).length;
+  const stale = stalenessNotice(rows.length > 0, telemetryReadable);
 
   return (
     <main className="wrap">
@@ -255,12 +257,12 @@ export default async function Board() {
           <code>{error}</code>
         </p>
       ) : rows.length === 0 ? (
-        <p className="empty">
-          No shots are being watched yet. Run a render and this board fills itself from the
-          telemetry, with no seeding step.
+        <p className={telemetryReadable ? "empty" : "empty unreadable"}>
+          {emptyMessage(telemetryReadable)}
         </p>
       ) : (
         <>
+          {stale ? <p className="empty unreadable">{stale}</p> : null}
           <div className="grid">
             {rows.map(({ shot }) => (
               <ShotCard key={shot.id} shot={shot} base={base} />
