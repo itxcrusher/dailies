@@ -24,7 +24,13 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import TypeVar
 
-__all__ = ["RETRY_ATTEMPTS", "RETRY_DELAY_SECONDS", "is_rate_limited", "run_with_retry"]
+__all__ = [
+    "RETRY_ATTEMPTS",
+    "RETRY_DELAY_SECONDS",
+    "is_rate_limited",
+    "is_transient_server_error",
+    "run_with_retry",
+]
 
 _log = logging.getLogger(__name__)
 
@@ -59,25 +65,47 @@ def is_rate_limited(exc: BaseException) -> bool:
     )
 
 
+def is_transient_server_error(exc: BaseException) -> bool:
+    """Whether ``exc`` is the far side being briefly unavailable.
+
+    Grafana Cloud intermittently answers ``GET /api/datasources/uid/{uid}`` with a 503, and
+    the MCP server resolves the datasource that way on every single tool call. Measured in
+    production on 2026-09-02: the board rendered "the telemetry source could not be read"
+    on one load and served three shots on the next, with nothing changed in between.
+
+    That one is worth retrying and a 404 is not. A missing datasource stays missing however
+    many times it is asked; a 503 is the server saying *not right now*.
+    """
+    message = str(exc)
+    return any(code in message for code in ("status 503", "status 502", "status 504")) or (
+        "unavailable" in message.lower()
+    )
+
+
 async def run_with_retry(
     call: Callable[[], Awaitable[T]],
     *,
     attempts: int = RETRY_ATTEMPTS,
     delay: float = RETRY_DELAY_SECONDS,
+    retry_on: Callable[[BaseException], bool] = is_rate_limited,
 ) -> T:
-    """Run ``call``, retrying only a rate limit, with exponential backoff.
+    """Run ``call``, retrying only what ``retry_on`` accepts, with exponential backoff.
 
-    Everything other than a rate limit is raised immediately and unchanged.
+    Anything ``retry_on`` rejects is raised immediately and unchanged. The predicate is a
+    parameter rather than a fixed rule because the two callers retry different things: a
+    model call retries a rate limit, and a telemetry read retries a briefly unavailable
+    server. Retrying either condition in the other's place would spend a supervisor's
+    minute arriving at the same failure.
     """
     backoff = delay
     for attempt in range(1, attempts + 1):
         try:
             return await call()
         except Exception as exc:
-            if not is_rate_limited(exc) or attempt == attempts:
+            if not retry_on(exc) or attempt == attempts:
                 raise
             _log.warning(
-                "Model call rate-limited (attempt %d of %d); retrying in %.1fs",
+                "Retryable failure (attempt %d of %d); retrying in %.1fs",
                 attempt,
                 attempts,
                 backoff,

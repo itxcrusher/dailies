@@ -11,7 +11,12 @@ it moved here.
 """
 
 import pytest
-from dailies_api.retry import RETRY_ATTEMPTS, is_rate_limited, run_with_retry
+from dailies_api.retry import (
+    RETRY_ATTEMPTS,
+    is_rate_limited,
+    is_transient_server_error,
+    run_with_retry,
+)
 
 
 class Exhausted(Exception):
@@ -94,3 +99,67 @@ async def test_the_visual_check_retries_a_rate_limit():
     verdict = await check_frame(b"x", shot="SH201", model=flaky, retry_delay=0)
     assert verdict["verdict"] == "suspect"
     assert calls == 2
+
+
+class TestTransientServerErrors:
+    """A 503 from Grafana must not empty the board.
+
+    The MCP server resolves the datasource by uid on every tool call, and Grafana Cloud
+    intermittently answers that endpoint with a 503. Measured in production on 2026-09-02:
+    the board rendered "the telemetry source could not be read" on one load and served
+    three shots on the next, with nothing changed in between. Over a four-week judging
+    window that is a page some judges open broken.
+    """
+
+    def test_a_503_is_worth_asking_again(self):
+        error = RuntimeError(
+            "Grafana MCP tool 'query_prometheus' reported an error: 'getting backend: get "
+            "datasource by uid grafanacloud-prom: [GET /datasources/uid/{uid}] "
+            "getDataSourceByUID (status 503): {}'"
+        )
+        assert is_transient_server_error(error)
+
+    def test_502_and_504_count_too(self):
+        assert is_transient_server_error(RuntimeError("bad gateway (status 502)"))
+        assert is_transient_server_error(RuntimeError("gateway timeout (status 504)"))
+
+    def test_a_404_is_not_transient(self):
+        """A missing datasource stays missing however many times it is asked. Retrying it
+        spends a supervisor's wait arriving at the same answer."""
+        assert not is_transient_server_error(RuntimeError("datasource not found (status 404)"))
+
+    def test_a_401_is_not_transient(self):
+        """An expired token is not going to un-expire on the second attempt."""
+        assert not is_transient_server_error(RuntimeError("unauthorized (status 401)"))
+
+    @pytest.mark.asyncio
+    async def test_a_transient_failure_is_retried_and_then_succeeds(self):
+        attempts = []
+
+        async def flaky():
+            attempts.append(1)
+            if len(attempts) < 2:
+                raise RuntimeError("getDataSourceByUID (status 503)")
+            return "three shots"
+
+        result = await run_with_retry(
+            flaky, attempts=3, delay=0.0, retry_on=is_transient_server_error
+        )
+        assert result == "three shots"
+        assert len(attempts) == 2
+
+    @pytest.mark.asyncio
+    async def test_the_predicate_is_respected_and_a_rate_limit_is_not_retried_here(self):
+        """The two callers retry different things. A telemetry read must not sit through a
+        model's backoff, and a model call must not retry a datasource outage."""
+        attempts = []
+
+        async def rate_limited():
+            attempts.append(1)
+            raise RuntimeError("429 RESOURCE_EXHAUSTED")
+
+        with pytest.raises(RuntimeError):
+            await run_with_retry(
+                rate_limited, attempts=3, delay=0.0, retry_on=is_transient_server_error
+            )
+        assert len(attempts) == 1, "a rate limit is not a transient server error"

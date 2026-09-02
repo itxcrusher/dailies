@@ -40,6 +40,7 @@ from pydantic import BaseModel, Field
 from dailies_api.annotate import should_annotate
 from dailies_api.delivery import rate
 from dailies_api.provenance import agent_fingerprint
+from dailies_api.retry import is_transient_server_error, run_with_retry
 from dailies_api.state import Shot, ShotStore
 
 __all__ = [
@@ -169,7 +170,7 @@ def build_shot_source(env: Mapping[str, str] | None = None) -> ShotSource | None
         def __init__(self) -> None:
             self.telemetry: dict[str, Any] = {}
 
-        async def list_shots(self) -> list[Shot]:
+        async def _once(self) -> list[Shot]:
             async with connect(url) as session:
                 grafana = GrafanaMCP(session, prometheus_uid=prometheus_uid, loki_uid=loki_uid)
                 inner = GrafanaShotSource(grafana)
@@ -178,6 +179,30 @@ def build_shot_source(env: Mapping[str, str] | None = None) -> ShotSource | None
                 # the route reads `source.telemetry` off the long-lived wrapper.
                 self.telemetry = inner.telemetry
                 return shots
+
+        async def list_shots(self) -> list[Shot]:
+            """One read of the farm, asked twice if Grafana was briefly unavailable.
+
+            The MCP server resolves the datasource by uid on every tool call, and Grafana
+            Cloud intermittently answers that endpoint with a 503. Measured in production
+            on 2026-09-02: the board rendered "the telemetry source could not be read" on
+            one load and served three shots on the next, with nothing changed between them.
+            Across four weeks of judging that is a page some judges simply find broken.
+
+            Retries only a transient server error, never a 404 or a 401: a missing
+            datasource stays missing and an expired token does not un-expire, and asking
+            again for either spends a reader's wait to reach the same answer. The whole
+            session is reopened rather than the query alone, because the failure is in
+            resolving the datasource the session is about to use.
+            """
+            return await run_with_retry(
+                self._once,
+                # Two, and short. Someone is watching a page load; a board that takes eight
+                # seconds to admit a problem is its own kind of failure.
+                attempts=2,
+                delay=0.75,
+                retry_on=is_transient_server_error,
+            )
 
     return _PerRequest()
 
