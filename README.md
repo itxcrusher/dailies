@@ -99,6 +99,27 @@ A second class of defect cost as much and looks nothing like the first. The cool
 
 That test could not fail on a developer machine. A workstation has been up for days, so the same code computes an age of several hundred thousand seconds and sails past the cooldown; the bug existed only where the clock was young. It fails now because the clock is an input to the test rather than an ambient fact, which is the general form of the fix: **the environment a test runs in is part of the test, whether or not it is written down.**
 
+## Breaking it on purpose
+
+```bash
+python -m dailies_chaos list
+python -m dailies_chaos inject missing-texture --shot SH400
+```
+
+Three faults, each inducible with the render worker exactly as it is, through environment the scene already reads. Driven end to end on the live farm on 2026-09-02:
+
+```
+inject missing-texture --shot SH400  ->  a real Blender render with the fault
+board                                ->  SH400 appears, from telemetry, unseeded
+diagnose                             ->  problem_found true, high confidence,
+                                         cause names /assets/jacket_diffuse.exr
+the frame, checked independently     ->  suspect: "flat, saturated magenta, no texture"
+```
+
+Each scenario declares what it proves and what the agent should conclude, so a run has a pass and a fail rather than a shrug. `missing-texture` is the failure nothing else catches. `slow-frame` is delivery risk with no failure at all: nothing errors, the shot simply will not land in time, which is a different question answered by different arithmetic. `worker-oom` is the loud one a render farm already catches, kept as the baseline the silent failures are measured against rather than as a feature of this project.
+
+**Three, not the six the SPEC listed.** Task crash, output-write failure and priority inversion would each need new code in the worker to simulate, and a chaos suite whose faults are themselves mocks proves less than three real ones.
+
 ## What the agent scores
 
 `python -m dailies_api.evals.harness`, or `gcloud run jobs execute dailies-evals`. Four scenarios, each telemetry with a known answer. Only the network is faked: above the replayed session sit the real MCP wrapper, the real tool routing, the real prompt, a real Gemini call and the real schema validation.
