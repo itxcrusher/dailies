@@ -26,6 +26,7 @@ import Link from "next/link";
 import { describeConfidence, describeSlack, formatEta } from "../delivery";
 import { DiagnoseButton } from "../DiagnoseButton";
 import { normalizeDiagnosis, type Diagnosis } from "../diagnosis";
+import { briefing } from "../briefing";
 import { emptyMessage, stalenessNotice } from "../board-state";
 import { answeredAgo, provenanceNote } from "../answer-age";
 import { apiBase, fetchShots, hasLanded, parseId, percent, type Shot } from "../shots";
@@ -263,6 +264,9 @@ export default async function Board() {
       ) : (
         <>
           {stale ? <p className="empty unreadable">{stale}</p> : null}
+          {/* The producer's paragraph, above the instrument. A supervisor reads the grid;
+              a producer wants one sentence about whether anything needs them. */}
+          <p className="briefing">{briefing(shots)}</p>
           <div className="grid">
             {rows.map(({ shot }) => (
               <ShotCard key={shot.id} shot={shot} base={base} />

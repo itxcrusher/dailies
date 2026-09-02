@@ -743,3 +743,14 @@ a {
   border-left: 2px solid var(--watch);
   padding-left: 12px;
 }
+
+/* The producer briefing. Sits above the grid and reads as prose, not as a widget: it is
+   the one thing on this page written for someone who will not scan a table. */
+.briefing {
+  font: 500 clamp(15px, 1.9vw, 18px) / 1.5 var(--font-display);
+  color: var(--w);
+  background: var(--k-raise);
+  border-left: 3px solid var(--y);
+  margin: 0 0 18px;
+  padding: 14px 18px;
+}
