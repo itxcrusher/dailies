@@ -51,7 +51,7 @@ pip install -e ".[dev,agent]"
 cp .env.example .env
 
 # 3. Run the gate
-python -m pytest -q                 # 580 tests
+python -m pytest -q                 # 649 tests
 python -m ruff check . && python -m ruff format --check .
 (cd apps/web && npm test && npx tsc --noEmit)
 
@@ -84,7 +84,7 @@ packages/graph/      production graph, completion forecast, delivery slack
 dashboards/          the Grafana dashboard, and a publisher that refuses empty panels
 scenes/              the Blender scene the demo renders, including the broken variant
 infra/               Dockerfiles, Cloud Build config, Terraform
-tests/               580 tests, heaviest over the parser and the agent contracts
+tests/               649 tests, heaviest over the parser and the agent contracts
 ```
 
 ## Notes on the engineering
@@ -98,6 +98,58 @@ Every one produced **an empty result rather than an error**. That is the lesson 
 A second class of defect cost as much and looks nothing like the first. The cooldown that stops the public Diagnose button from being a free Vertex tap read a missing entry as `0.0`, and `0.0` on a monotonic clock is not a moment long past. It is the clock's origin, and the origin is per sandbox. A freshly started Cloud Run instance is seconds old, so every shot restored from storage sat inside a five-minute cooldown and the service refused to diagnose anything for the first five minutes after each cold start, which is the normal path for a visitor arriving at a service that has scaled to zero.
 
 That test could not fail on a developer machine. A workstation has been up for days, so the same code computes an age of several hundred thousand seconds and sails past the cooldown; the bug existed only where the clock was young. It fails now because the clock is an input to the test rather than an ambient fact, which is the general form of the fix: **the environment a test runs in is part of the test, whether or not it is written down.**
+
+## Verifying it end to end
+
+Four levels, each needing more access than the last. Everything below was run on 2026-09-02 and the numbers are what it printed.
+
+**1. Nothing but a browser.** No credentials, no checkout.
+
+| | |
+| --- | --- |
+| The case | <https://dailies-web-3tc7ky4kha-uc.a.run.app> |
+| The board | <https://dailies-web-3tc7ky4kha-uc.a.run.app/board> |
+| The dashboard | <https://politebamboo549.grafana.net/public-dashboards/2f36b669818743dcbe8d195b79175af9> |
+
+On the board, press **Diagnose** on any shot and wait about forty seconds. The queries under the answer are real; paste one into Grafana and it returns what the report says it returned. Press it twice and the button says when it last answered rather than pretending to recompute.
+
+**2. The repository, no cloud account.**
+
+```bash
+pip install -e ".[dev,agent]"
+python -m pytest -q                          # 649 passed
+python -m ruff check . && python -m ruff format --check .
+(cd apps/web && npm install && npm test && npx tsc --noEmit)   # 60 passed
+```
+
+The render image builds without any of this project's infrastructure, and prints its own telemetry to stdout:
+
+```bash
+docker build -f infra/Dockerfile.render -t dailies-render .
+docker run --rm -e DAILIES_SHOT=SH010 -e DAILIES_FRAME_END=2 dailies-render
+```
+
+**3. With access to the project.** This is where the claims stop being claims.
+
+```bash
+python -m dailies_chaos list
+python -m dailies_chaos inject missing-texture --shot SH400
+```
+
+Watch SH400 arrive on the board from telemetry, then press Diagnose. Expect `problem_found` true, a cause naming `/assets/jacket_diffuse.exr`, and the frame independently returning `suspect`. Nothing about that shot was seeded.
+
+```bash
+gcloud run jobs execute dailies-evals --region=us-central1 --wait   # 4/4 on the last run
+```
+
+**4. The infrastructure.**
+
+```bash
+terraform -chdir=infra/terraform plan
+gcloud scheduler jobs list --location=us-central1     # 3 jobs, every 6 hours
+```
+
+`plan` reports **3 in-place updates and that is expected**. The Cloud Run API populates a service-level `scaling` block with zeros that this config does not declare, so the provider offers to remove it on every plan and applying never clears it. It is not the revision's scaling: `min_instance_count = 1` is applied, and `gcloud run services describe` confirms `minScale: 1`.
 
 ## Breaking it on purpose
 
