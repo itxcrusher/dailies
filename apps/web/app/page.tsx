@@ -108,7 +108,7 @@ export default async function Landing() {
       <div className="mast">
         {/* The same mark as the board's mast, so the two pages read as one product. */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/mark.svg" alt="" width={38} height={38} className="mark" />
+        <img src="/icon.svg" alt="" width={38} height={38} className="mark" />
         <span className="wordmark">Dailies</span>
         <div className="stripe" aria-hidden="true" />
         <Link className="to-board" href="/board">

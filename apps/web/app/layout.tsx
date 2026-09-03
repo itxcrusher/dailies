@@ -2,6 +2,12 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
+  // Without this, Next resolves og:image against http://localhost:3000 and every link
+  // preview points at a machine nobody else can reach. Verified against the deployment:
+  // the tag really did ship as localhost.
+  metadataBase: new URL(
+    process.env.DAILIES_SITE_URL ?? "https://dailies-web-3tc7ky4kha-uc.a.run.app",
+  ),
   title: "Dailies",
   description:
     "A render exits 0 and the jacket is magenta. Dailies reads render telemetry through the Grafana MCP server, then opens the frame itself to check the two answers agree.",
