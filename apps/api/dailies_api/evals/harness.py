@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -210,8 +211,30 @@ async def _run(model: str | None) -> int:
     print(f"\n  {passed}/{len(grades)} scenarios passed")
     # A single run of a language model is a sample, not a measurement. The number above is
     # reported as what happened on this run, which is the honest form of it.
+
+    # The differentiator, measured. Skipped rather than faked when no bucket is wired:
+    # a recall number over frames that were never read would be the worst kind of
+    # number, because it looks exactly like a real one.
+    bucket = os.environ.get("DAILIES_FRAMES_BUCKET", "").strip()
+    visual_ok = True
+    if bucket:
+        from .visual import run_visual_eval
+
+        print()
+        print("  visual-defect recall, over frames the farm rendered")
+        result = await run_visual_eval(bucket=bucket)
+        for row in result["rows"]:
+            print(row)
+        print()
+        caught, alarms = result["recall"], result["false_positives"]
+        print(f"  recall {caught} caught, {alarms} false alarms")
+        visual_ok = bool(result["passed"])
+    else:
+        print()
+        print("  (no DAILIES_FRAMES_BUCKET; the visual check was not scored)")
+
     print("  (one run; a model is sampled, not measured, so re-run before quoting a rate)")
-    return 0 if passed == len(grades) else 1
+    return 0 if passed == len(grades) and visual_ok else 1
 
 
 def main(argv: list[str] | None = None) -> int:

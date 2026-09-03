@@ -467,6 +467,15 @@ resource "google_cloud_run_v2_job" "evals" {
           name  = "GOOGLE_CLOUD_LOCATION"
           value = var.region
         }
+
+        # The frames the visual half of the harness scores. Real output from real renders,
+        # read at run time rather than compiled in: a recall number over fixtures drawn to
+        # be obvious would measure whether Gemini can see magenta, not whether this check
+        # works on this farm's frames.
+        env {
+          name  = "DAILIES_FRAMES_BUCKET"
+          value = google_storage_bucket.frames.name
+        }
       }
     }
   }
