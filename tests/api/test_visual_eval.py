@@ -58,3 +58,40 @@ class TestScoring:
         recall exactly when the check is broken."""
         assert score_visual(expect_defect=True, verdict=verdict) is False
         assert score_visual(expect_defect=False, verdict=verdict) is False
+
+
+class TestTheRunner:
+    @pytest.mark.asyncio
+    async def test_it_unpacks_the_reader_pair_from_gcs_reader(self, monkeypatch):
+        """frames.gcs_reader returns (list_objects, read_object), not one callable.
+
+        Treating it as a single callable raised "tuple object is not callable" on all
+        eight frames in production, and every one scored as a miss. This pins the shape of
+        the seam rather than the shape I assumed it had.
+        """
+        from dailies_api.evals import visual
+
+        async def fake_list(_prefix):
+            return []
+
+        async def fake_read(name):
+            return b"not-a-real-png"
+
+        monkeypatch.setattr(visual, "gcs_reader", lambda _b: (fake_list, fake_read), raising=False)
+        import dailies_api.frames as frames_module
+
+        monkeypatch.setattr(frames_module, "gcs_reader", lambda _b: (fake_list, fake_read))
+
+        async def fake_check(image, *, shot, model, path):
+            return {"verdict": "suspect" if shot == "SH201" else "looks_correct"}
+
+        import dailies_api.visual_qa as vqa
+
+        monkeypatch.setattr(vqa, "check_frame", fake_check)
+        monkeypatch.setattr(vqa, "gemini_vision", lambda _m: object())
+        monkeypatch.setattr(visual, "_SETTLE_SECONDS", 0.0)
+
+        result = await visual.run_visual_eval(bucket="irrelevant")
+        assert result["recall"] == "4/4"
+        assert result["false_positives"] == "0/4"
+        assert result["passed"] is True

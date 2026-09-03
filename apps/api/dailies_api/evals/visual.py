@@ -91,12 +91,25 @@ def _default_model() -> str:
     return INVESTIGATOR_MODEL
 
 
-async def run_visual_eval(*, bucket: str, model: str | None = None) -> dict[str, Any]:
-    """Run every visual case and return the two numbers that matter."""
+async def run_visual_eval(
+    *,
+    bucket: str,
+    model: str | None = None,
+    read: Any = None,
+) -> dict[str, Any]:
+    """Run every visual case and return the two numbers that matter.
+
+    ``read`` is injectable so the arithmetic can be exercised without Cloud Storage. The
+    default path is still the one that broke first: ``gcs_reader`` returns a PAIR of
+    callables, listing and reading, and calling the pair itself raised "tuple object is
+    not callable" on all eight frames. The recall printed 0/4 rather than a convincing
+    number, which is the one thing that went right.
+    """
     from ..frames import gcs_reader
     from ..visual_qa import check_frame, gemini_vision
 
-    read = gcs_reader(bucket)
+    if read is None:
+        _list_objects, read = gcs_reader(bucket)
     vision = gemini_vision(model or _default_model())
 
     caught = missed = correct_clean = false_alarm = 0
