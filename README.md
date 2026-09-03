@@ -185,6 +185,20 @@ no_telemetry          -     pass   pass     pass    4 queries
 4/4
 ```
 
+And the differentiator, over eight frames the farm actually rendered:
+
+```
+visual-defect recall
+ok    SH201/frame_0001.png   suspect          ok    SH200/frame_0001.png   looks_correct
+ok    SH201/frame_0002.png   suspect          ok    SH200/frame_0002.png   looks_correct
+ok    SH201/frame_0003.png   suspect          ok    SH200/frame_0003.png   looks_correct
+ok    SH201/frame_0004.png   suspect          ok    SH200/frame_0004.png   looks_correct
+
+recall 4/4 caught, 0/4 false alarms
+```
+
+The clean column is the load-bearing half. A check that answers "suspect" to everything catches every defect, so recall computed only over broken frames is unfalsifiable, and the false-alarm count is the more expensive error in practice: a check that cries wolf on working frames gets ignored.
+
 One run. A model is sampled, not measured, so that is what happened rather than a rate.
 
 The fixtures are captured from the live stack, not written. An invented fixture encodes what its author believes the farm emits, so an eval built on one scores the agent against that belief. SH200's fixture has **no log lines at all**, because a healthy render is silent and reading silence as a broken query is this repo's recurring failure.
