@@ -754,3 +754,15 @@ a {
   margin: 0 0 18px;
   padding: 14px 18px;
 }
+
+/* The mark beside the wordmark. Optically nudged down: the clapper's stripes read as its
+   top edge, so aligning the box centres it too high against the cap height. */
+.mast h1 .mark {
+  vertical-align: -6px;
+  margin-right: 12px;
+}
+
+.landing .mast .mark {
+  margin-right: 14px;
+  flex: none;
+}

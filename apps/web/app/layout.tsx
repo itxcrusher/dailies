@@ -4,7 +4,16 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Dailies",
   description:
-    "A render exits 0 and the jacket is grey. Dailies reads render telemetry through the Grafana MCP server and catches the frames that succeeded and are still wrong.",
+    "A render exits 0 and the jacket is magenta. Dailies reads render telemetry through the Grafana MCP server, then opens the frame itself to check the two answers agree.",
+  // Next resolves app/icon.svg, app/apple-icon.png and app/opengraph-image.png by
+  // convention; these give the link preview the words to go with the picture.
+  openGraph: {
+    title: "Dailies",
+    description:
+      "A Gemini agent reads render telemetry through the Grafana MCP server, then opens the frame itself to check the two answers agree.",
+    type: "website",
+  },
+  twitter: { card: "summary_large_image" },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -243,6 +243,11 @@ export default async function Board() {
       <div className="mast">
         <h1>
           <Link href="/" style={{ textDecoration: "none" }}>
+            {/* The mark is the mast's own motif: a clapper over a grid of frames, one of
+                them magenta. Decorative here because the wordmark beside it already
+                names the product. */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/mark.svg" alt="" width={34} height={34} className="mark" />
             Dailies
           </Link>
         </h1>
