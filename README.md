@@ -8,9 +8,9 @@ Nobody finds out until a human watches the dailies.
 
 Dailies is an AI reliability layer that catches that from telemetry, before anyone watches anything. A Gemini agent reads live render telemetry **through the Grafana MCP server**, rates delivery risk against the creative deadline, diagnoses failures with a citation for every claim, and then opens the frame the render actually produced and says whether the picture is wrong.
 
-**Live:** <https://dailies-web-3tc7ky4kha-uc.a.run.app>
+**Demo video:** <https://youtu.be/HdOz1-Lh9Rw> (2:33).
 
-**Dashboard:** <https://politebamboo549.grafana.net/public-dashboards/2f36b669818743dcbe8d195b79175af9> - the render pipeline and, underneath it, the agent that reads the render pipeline. No login.
+**The hosted version was retired on 2026-10-20**, after the hackathon it was built for. It ran on Cloud Run against a Grafana Cloud stack from 2026-08-29 to 2026-10-18, and its infrastructure is still described in `infra/terraform`. Of the four verification levels below, level 2 runs from this repository alone; levels 1, 3 and 4 needed the deployed project and are kept as the record of what was run.
 
 ## The failure this exists for
 
@@ -103,15 +103,7 @@ That test could not fail on a developer machine. A workstation has been up for d
 
 Four levels, each needing more access than the last. Everything below was run on 2026-09-02 and the numbers are what it printed.
 
-**1. Nothing but a browser.** No credentials, no checkout.
-
-| | |
-| --- | --- |
-| The case | <https://dailies-web-3tc7ky4kha-uc.a.run.app> |
-| The board | <https://dailies-web-3tc7ky4kha-uc.a.run.app/board> |
-| The dashboard | <https://politebamboo549.grafana.net/public-dashboards/2f36b669818743dcbe8d195b79175af9> |
-
-On the board, press **Diagnose** on any shot and wait about forty seconds. The queries under the answer are real; paste one into Grafana and it returns what the report says it returned. Press it twice and the button says when it last answered rather than pretending to recompute.
+**1. Nothing but a browser.** Retired with the hosted version on 2026-10-20; the [demo video](https://youtu.be/HdOz1-Lh9Rw) shows this level running. While it was live, pressing **Diagnose** on any shot on the board answered in about forty seconds, with the real queries under the answer, and pressing it twice showed when it last answered rather than pretending to recompute.
 
 **2. The repository, no cloud account.**
 
@@ -129,7 +121,7 @@ docker build -f infra/Dockerfile.render -t dailies-render .
 docker run --rm -e DAILIES_SHOT=SH010 -e DAILIES_FRAME_END=2 dailies-render
 ```
 
-**3. With access to the project.** This is where the claims stop being claims.
+**3. With access to the project.** This is where the claims stop being claims. (Needs the deployed project, retired on 2026-10-20; kept as the record of what was run.)
 
 ```bash
 python -m dailies_chaos list
@@ -142,7 +134,7 @@ Watch SH400 arrive on the board from telemetry, then press Diagnose. Expect `pro
 gcloud run jobs execute dailies-evals --region=us-central1 --wait   # 4/4 on the last run
 ```
 
-**4. The infrastructure.**
+**4. The infrastructure.** (Also needs the deployed project; kept as a record.)
 
 ```bash
 terraform -chdir=infra/terraform plan
